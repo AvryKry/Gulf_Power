@@ -1,3 +1,4 @@
-### Reset
+#### reset main
 
-print("Avry_General branch of hello_world.py has been reset")
+
+print("now this prints in main, different than Avry_General")
