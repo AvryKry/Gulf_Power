@@ -1,10 +1,9 @@
-##
-print("This is now in a different branch - Avry checkout branch")
+## This code will be rebased into Avry General
+
+print("This code was created in To_Rebase branch and will be rebased into Avry General")
 
 
 
+## we will see if any merge errors occur since this code is written differently
 
-## These comments will be put into a branch
-
-
-## These comments made after the merge with Avry_General
+print("Git is really good at merging changes usually, so this may pass, while more contrdictory fcuntionaly could comflict and cause errors")
