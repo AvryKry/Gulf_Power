@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+results/*
+!results/.gitkeep
+data_confidential/*
+!data_confidential/.gitkeep
+*.pyc
