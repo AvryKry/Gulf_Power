@@ -4,4 +4,5 @@ results/*
 !results/.gitkeep
 data_confidential/*
 !data_confidential/.gitkeep
+tut_1-1_dss_files
 *.pyc
