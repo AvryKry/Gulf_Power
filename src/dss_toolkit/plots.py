@@ -56,17 +56,48 @@ def draw_branches(ax, engine, exclude=()):
         ax.plot([x1, x2], [y1, y2], color=INK, lw=1.5, ls=":", zorder=1)
 
 
-def draw_buses(ax, engine, exclude=(), values=None, cmap="Blues", labels=True):
-    """Bus circles; if 'values' {bus: number} is given the circles are coloured by it."""
+def short_labels(names):
+    """{name: shortest ending of the name (split at '_') that is still unique among 'names'},
+    e.g. 'bus_mg1_t1_f1_b12' -> 'b12', but 'bus_mg1_t1_f1_b1' -> 'f1_b1' if 'bus_mg1_t1_f2_b1' exists.
+    Names without '_' (e.g. '632') stay as they are."""
+    parts = {n: n.split("_") for n in names}
+    out = {}
+    for n, p in parts.items():
+        for k in range(1, len(p) + 1):
+            candidate = "_".join(p[-k:])
+            if sum("_".join(q[-k:]) == candidate for q in parts.values() if len(q) >= k) == 1:
+                break
+        out[n] = candidate
+    return out
+
+
+def bus_label_texts(buses, labels):
+    """{bus: text} for a label option: True / "full" = full name, "short" = short_labels(),
+    False / None = no labels ({}), or a function name -> text."""
+    if not labels:
+        return {}
+    if callable(labels):
+        return {b: labels(b) for b in buses}
+    if labels == "short":
+        return short_labels(buses)
+    if labels in (True, "full"):
+        return {b: b for b in buses}
+    raise ValueError(f"labels must be True, 'full', 'short', False/None or a function, not {labels!r}")
+
+
+def draw_buses(ax, engine, exclude=(), values=None, cmap="Blues", labels=True, fontsize=8):
+    """Bus circles; if 'values' {bus: number} is given the circles are coloured by it.
+    'labels': True / "full", "short", False / None, or a function (see bus_label_texts)."""
     buses = net.bus_names(engine, exclude)
     xy = np.array([net.bus_xy(engine, b) for b in buses])
     colours = [values[b] for b in buses] if values else "white"
     sc = ax.scatter(xy[:, 0], xy[:, 1], s=160 if values else 60, c=colours, cmap=cmap if values else None,
                     edgecolors=INK, lw=0.8, zorder=2)
-    if labels:
-        for b, (x, y) in zip(buses, xy):
-            text = f"{b}\n{values[b]:+.1f}" if values else b
-            ax.annotate(text, (x, y), xytext=(8, 8), textcoords="offset points", fontsize=8)
+    texts = bus_label_texts(buses, labels)
+    for b, (x, y) in zip(buses, xy):
+        if b in texts:
+            text = f"{texts[b]}\n{values[b]:+.1f}" if values else texts[b]
+            ax.annotate(text, (x, y), xytext=(8, 8), textcoords="offset points", fontsize=fontsize)
     return sc
 
 
@@ -77,7 +108,7 @@ def draw_loads_and_capacitors(ax, engine):
         ax.scatter(x, y, marker=marker, s=size, facecolors="none", edgecolors="#2a78d6", lw=lw, zorder=3)
     for bus in net.capacitor_buses(engine):
         x, y = net.bus_xy(engine, bus)
-        ax.scatter(x, y-100, marker="^", s=70, color="#eb6834", zorder=3)
+        ax.scatter(x, y, marker="^", s=70, color="#eb6834", zorder=3)
 
 
 def draw_map_legend(ax):
@@ -90,14 +121,15 @@ def draw_map_legend(ax):
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=4, frameon=False)
 
 
-def plot_network_map(engine, exclude=(), title="Network"):
-    """Map of the circuit from its bus coordinates. Returns None if there are no coordinates."""
+def plot_network_map(engine, exclude=(), title="Network", labels=True):
+    """Map of the circuit from its bus coordinates. Returns None if there are no coordinates.
+    'labels': True / "full", "short", False / None, or a function (see bus_label_texts)."""
     if not net.has_coordinates(engine, exclude):
         print("No bus coordinates in this circuit: the network map is skipped.")
         return None
     fig, ax = plt.subplots(figsize=(9, 6))
     draw_branches(ax, engine, exclude)
-    draw_buses(ax, engine, exclude)
+    draw_buses(ax, engine, exclude, labels=labels)
     draw_loads_and_capacitors(ax, engine)
     draw_map_legend(ax)
     hide_axes(ax)
@@ -111,16 +143,18 @@ def bus_voltage_change(engine, a, b, exclude=()):
             for bus in net.bus_names(engine, exclude)}
 
 
-def plot_voltage_change_map(engine, a, b, exclude=(), highlight=(), title="Voltage change"):
+def plot_voltage_change_map(engine, a, b, exclude=(), highlight=(), title="Voltage change", labels=True):
     """Network map with buses coloured by the voltage change from case a to case b;
-    'highlight' buses (e.g. PV locations) get an orange square."""
+    'highlight' buses (e.g. PV locations) get an orange square. 'labels' as in plot_network_map;
+    with labels off the change values are not printed either (the colour bar still shows them)."""
     if not net.has_coordinates(engine, exclude):
         print("No bus coordinates in this circuit: the voltage change map is skipped.")
         return None
     change = bus_voltage_change(engine, a, b, exclude)
     fig, ax = plt.subplots(figsize=(9, 6))
     draw_branches(ax, engine, exclude)
-    sc = draw_buses(ax, engine, exclude, values=change, cmap="Blues" if min(change.values()) >= 0 else "RdBu_r")
+    sc = draw_buses(ax, engine, exclude, values=change, cmap="Blues" if min(change.values()) >= 0 else "RdBu_r",
+                    labels=labels)
     for bus in highlight:
         x, y = net.bus_xy(engine, net.bus_name(bus))
         ax.scatter(x, y, marker="s", s=420, facecolors="none", edgecolors="#eda100", lw=2, zorder=3)
