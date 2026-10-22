@@ -736,4 +736,3 @@ ax.legend(loc="upper right")
 fig.suptitle("Figure 5. Feeder power balance and line loading")
 fig.tight_layout()
 plt.show()
-

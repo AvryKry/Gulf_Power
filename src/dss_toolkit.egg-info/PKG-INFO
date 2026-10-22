@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: dss_toolkit
+Version: 0.1.0
+Summary: Reusable OpenDSS (DSS-Python) bricks for power flow and DER hosting capacity studies
+Requires-Python: >=3.9
+Requires-Dist: dss-python
+Requires-Dist: numpy
+Requires-Dist: matplotlib

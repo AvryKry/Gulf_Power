@@ -1,0 +1,3 @@
+dss-python
+numpy
+matplotlib
