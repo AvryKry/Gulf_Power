@@ -46,10 +46,13 @@ def load_results(engine, vnode):
 
 
 def pv_results(engine):
-    """{PV system: (bus.nodes, P out [kW], Q out [kvar])}  (positive = generation)"""
+    """{PV system: (bus.nodes, P out [kW], Q out [kvar])}  (positive = generation); disabled PV
+    systems (switched off with timeseries.set_der_enabled) are left out."""
     out = {}
     for pv in net.element_names(engine.ActiveCircuit.PVSystems):
         p, q = element_powers(engine, f"PVSystem.{pv}")
+        if not engine.ActiveCircuit.ActiveElement.Enabled:
+            continue
         out[pv] = (net.element_bus(engine, f"PVSystem.{pv}"), -p.sum(), -q.sum())
     return out
 

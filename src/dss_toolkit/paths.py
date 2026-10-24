@@ -11,6 +11,7 @@ DEFAULT_ROOT_MARKERS = (".git", ".gitignore", "requirements.txt")
 def figure_path(name, figure_folder):
     return Path(figure_folder) / name if figure_folder else None
 
+
 def find_project_root(start=None, markers=DEFAULT_ROOT_MARKERS):
     """Move up from 'start' (default: the folder Python runs in) until a folder contains one of
     the 'markers'. Return that folder, or 'start' itself if no marker is found."""

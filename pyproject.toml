@@ -7,7 +7,7 @@ name = "dss_toolkit"
 version = "0.1.0"
 description = "Reusable OpenDSS (DSS-Python) bricks for power flow and DER hosting capacity studies"
 requires-python = ">=3.9"
-dependencies = ["dss-python", "numpy", "matplotlib"]
+dependencies = ["dss-python", "numpy", "matplotlib", "pandas"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
