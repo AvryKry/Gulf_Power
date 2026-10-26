@@ -11,12 +11,18 @@ def single_phase_kv(kv_line_to_line):
     return kv_line_to_line / math.sqrt(3)
 
 
-def pv_command(name, bus, phases, kv, kva, pmpp=None, pf=1.0, irradiance=1.0, daily_shape=None, extra=""):
+def pv_command(name, bus, phases, kv, kva, pmpp=None, pf=1.0, irradiance=1.0, daily_shape=None,
+               cutin_pct=0.05, cutout_pct=0.05, vmin_pu=0.5, vmax_pu=1.5, extra=""):
     """'new PVSystem...' command. kv is line-to-line for 3-phase PV, line-to-neutral for 1-phase.
-    pmpp defaults to kva. 'daily_shape' is the name of a load shape used in daily mode."""
+    pmpp defaults to kva. 'daily_shape' is the name of a load shape used in daily mode.
+    cutin_pct / cutout_pct: output (% of kVA) at which the inverter turns on / off. OpenDSS's default
+    is 20 %, which switches PV off on cloudy days and at dawn and dusk; 0.05 % follows Team Nando.
+    vmin_pu / vmax_pu: voltage range in which the PV keeps its constant-power model (OpenDSS's
+    default 0.90-1.10 changes the model at exactly the over-voltages a hosting study looks for)."""
     pmpp = kva if pmpp is None else pmpp
     command = (f"new PVSystem.{name} bus1={bus} phases={phases} kV={kv:.6g} kVA={kva:.6g} Pmpp={pmpp:.6g} "
-               f"pf={pf} irradiance={irradiance} model=1")
+               f"pf={pf} irradiance={irradiance} %cutin={cutin_pct} %cutout={cutout_pct} "
+               f"vminpu={vmin_pu} vmaxpu={vmax_pu} model=1")
     if daily_shape:
         command += f" daily={daily_shape}"
     return f"{command} {extra}".strip()

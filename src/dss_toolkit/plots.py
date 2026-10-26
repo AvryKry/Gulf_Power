@@ -137,6 +137,73 @@ def plot_network_map(engine, exclude=(), title="Network", labels=True):
     return fig
 
 
+# Outline marker, colour and legend label per DER kind. Kinds at the same bus are drawn as nested
+# outlines in this order (first = smallest), so nothing underneath is hidden.
+DER_STYLES = {"pv": ("*", "#eda100", "PV system"),
+              "storage": ("h", "#6250d6", "Battery (BESS)"),
+              "ev": ("v", "#1baf7a", "EV charger")}
+OTHER_DER_STYLE = ("P", "#e87ba4", None)
+
+
+def der_style(kind):
+    """(marker, colour, label) for a DER kind; unknown kinds get a fallback style labelled by kind."""
+    marker, colour, label = DER_STYLES.get(kind, OTHER_DER_STYLE)
+    return marker, colour, label or kind
+
+
+def der_at_buses(engine, scenario):
+    """{bus: {kind: (number of DER, total kVA)}} of a scenario's DER, by the bus of each DER's customer."""
+    inventory = net.load_inventory(engine)
+    found = {}
+    for d in scenario.der:
+        bus = net.bus_name(inventory[d.customer]["bus"])
+        count, kva = found.setdefault(bus, {}).get(d.kind, (0, 0.0))
+        found[bus][d.kind] = (count + 1, kva + d.kva)
+    return found
+
+
+def draw_der(ax, engine, scenario, base_size=260, layer_step=1.7, lw=1.6, show_counts=True):
+    """Mark every DER of a scenario at its customer's bus as an unfilled outline (the bus and load
+    markers stay visible). Several kinds on one bus are nested outlines, each 'layer_step' times the
+    area of the one inside it; more than one unit of a kind on a bus is labelled e.g. '2x'."""
+    order = list(DER_STYLES)
+    for bus, kinds in der_at_buses(engine, scenario).items():
+        x, y = net.bus_xy(engine, bus)
+        ranked = sorted(kinds, key=lambda k: order.index(k) if k in order else len(order))
+        for layer, kind in enumerate(ranked):
+            marker, colour, _ = der_style(kind)
+            ax.scatter(x, y, marker=marker, s=base_size * layer_step ** layer, facecolors="none",
+                       edgecolors=colour, lw=lw, zorder=4 + layer)
+            count = kinds[kind][0]
+            if show_counts and count > 1:
+                ax.annotate(f"{count}x", (x, y), xytext=(-10, -14 - 9 * layer), textcoords="offset points",
+                            fontsize=7, color=colour, ha="right", zorder=6)
+
+
+def plot_der_map(engine, scenario, exclude=(), title=None, labels="short"):
+    """Network map with the scenario's DER (PV, batteries, ...) marked as outlines where they were
+    placed. Returns None if the circuit has no bus coordinates."""
+    if not net.has_coordinates(engine, exclude):
+        print("No bus coordinates in this circuit: the DER map is skipped.")
+        return None
+    fig, ax = plt.subplots(figsize=(9, 6))
+    draw_branches(ax, engine, exclude)
+    draw_buses(ax, engine, exclude, labels=labels)
+    draw_loads_and_capacitors(ax, engine)
+    draw_der(ax, engine, scenario)
+    draw_map_legend(ax)
+    for kind in sorted({d.kind for d in scenario.der}, key=lambda k: list(DER_STYLES).index(k) if k in DER_STYLES else 99):
+        marker, colour, label = der_style(kind)
+        units = [d for d in scenario.der if d.kind == kind]
+        ax.scatter([], [], marker=marker, s=140, facecolors="none", edgecolors=colour, lw=1.6,
+                   label=f"{label} ({len(units)} x, {sum(d.kva for d in units):.0f} kVA total)")
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=4, frameon=False)
+    hide_axes(ax)
+    ax.set_title(title or f"DER placement: {len(scenario.der)} DER on {len(scenario.customers)} customers "
+                          f"({scenario.window.label})")
+    return fig
+
+
 def bus_voltage_change(engine, a, b, exclude=()):
     """{bus: largest change of its phase voltages from case a to case b [% of nominal]}"""
     return {bus: 100 * max((b["vnode"][f"{bus}.{n}"] - a["vnode"][f"{bus}.{n}"] for n in net.bus_nodes(engine, bus)), key=abs)
