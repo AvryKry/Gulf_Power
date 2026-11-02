@@ -10,7 +10,7 @@
 #   2. scenario = what is simulated: demand, PV, window    (scenario.random_scenario / penetration_scenarios)
 #   3. run      = one table row per scenario               (hosting.run_study)
 #
-# Avry Krywolt, October 24, 2026
+# Claude, October 24, 2026
 
 import sys
 from pathlib import Path
