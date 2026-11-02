@@ -38,7 +38,8 @@ SEASON_PV_FILES = {"Summer": ("Residential_PV_profiles_Summer.npy", 21), # (file
 VOLTAGE_BASES_KV = (22.0, 0.4)
 LIMITS_PU = (0.94, 1.10)                       # statutory limits: -6 % / +10 % of 230 V
 TRANSFORMER_RATING_KVA = 175.0                 # rating used for the utilisation in E.2
-SCENARIO_OPTIONS = dict(seed=10, pv_kva=10.0, pf_range=(0.9, 0.98))   # same for every scenario
+SCENARIO_OPTIONS = dict(pv_placement_seed=10, load_profile_seed=10, power_factor_seed=10,   # same for every scenario
+                        pv_kva=10.0, power_factor_range=(0.9, 0.98))
 PENETRATIONS = [0, 20, 40, 60, 80, 100]        # % of customers with PV
 TUTORIAL_DAYS = [0, 1, 2]                      # days simulated in Part A
 REUSE_CIRCUIT = False                          # True = build once, swap profiles (faster on large feeders)
@@ -51,19 +52,19 @@ def output_path(name):
 
 
 def show(fig, name):
-    plots.show_or_save(fig, output_path(name))
+    plots.save_figure(fig, output_path(name), show=True)
 
 
-SUMMARY_COLUMNS = [("Window", "window", "s"), ("PV %", "penetration", "d"), ("PV systems", "n_pv", "d"),
-                   ("Non-compliant", "n_noncompliant", "d"), ("Over", "n_over", "d"), ("Under", "n_under", "d"),
-                   ("V min (pu)", "v_min", ".4f"), ("V max (pu)", "v_max", ".4f"), ("Peak |S| (kVA)", "s_peak", ".1f"),
-                   ("Utilisation (%)", "utilisation", ".1f"), ("Min P (kW)", "p_min", ".1f")]
+SUMMARY_COLUMNS = [("Window", "window", "s"), ("PV %", "penetration_pct", "d"), ("PV systems", "n_pv_systems", "d"),
+                   ("Non-compliant", "n_noncompliant_customers", "d"), ("Over", "n_overvoltage_customers", "d"),
+                   ("Under", "n_undervoltage_customers", "d"), ("V min (pu)", "v_min_pu", ".4f"),
+                   ("V max (pu)", "v_max_pu", ".4f"), ("Peak |S| (kVA)", "transformer_peak_kva", ".1f"),
+                   ("Utilisation (%)", "transformer_utilisation_pct", ".1f"), ("Min P (kW)", "transformer_min_p_kw", ".1f")]
 
 
 def print_summary(table, title):
     """Print a results table (DataFrame from hosting.run_study) with the columns above."""
-    rows = [[reports.fmt(r[k], f) for _, k, f in SUMMARY_COLUMNS] for r in table.to_dict("records")]
-    reports.print_table([h for h, _, _ in SUMMARY_COLUMNS], rows, title)
+    reports.print_summary_table(table, SUMMARY_COLUMNS, title)
 
 
 # =============================================================================================
@@ -82,17 +83,17 @@ reports.print_load_inventory(net.load_inventory(engine))
 show(plots.plot_network_map(engine, title="LV circuit", labels="short"), "fig_network.png")  # needs bus coordinates
 
 # A.2 The profile data
-load_data = ts.load_profile_data(paths.locate_file(LOAD_DATA_FILE, data_folder, verbose=False))
-annual_pv = ts.load_profile_data(paths.locate_file(ANNUAL_PV_FILE, data_folder, verbose=False))
+load_data = ts.read_profile_file(paths.locate_file(LOAD_DATA_FILE, data_folder, verbose=False))
+annual_pv = ts.read_profile_file(paths.locate_file(ANNUAL_PV_FILE, data_folder, verbose=False))
 show(plots.plot_time_series(load_data[:, TUTORIAL_DAYS[0], :], f"All load profiles, day {TUTORIAL_DAYS[0]}",
                             "Active power (kW)", colour="#2a78d6", alpha=0.15), "fig_load_profiles.png")
 show(plots.plot_time_series(annual_pv, "Normalised PV profiles, every day of the year", "PV output (pu)",
                             colour="#eda100", alpha=0.08), "fig_pv_profiles_year.png")
 
 # A.3 Daily simulations at 100 % penetration: demand AND PV both come from their data for each day
-setup = hosting.StudySetup(master_file=str(master_file), voltage_bases_kv=VOLTAGE_BASES_KV, limits=LIMITS_PU,
+setup = hosting.StudySetup(circuit_source=str(master_file), voltage_bases_kv=VOLTAGE_BASES_KV, limits=LIMITS_PU,
                            transformer_rating_kva=TRANSFORMER_RATING_KVA)
-customers = hosting.study_customers(engine, setup)
+customers = hosting.list_customers(engine, setup)
 tutorial_scenarios = [sc.random_scenario(customers, load_data, annual_pv, sc.TimeWindow.days(day), 100, **SCENARIO_OPTIONS)
                       for day in TUTORIAL_DAYS]
 tutorial_table, tutorial = hosting.run_study(engine, setup, tutorial_scenarios, keep_simulations=True,
@@ -138,7 +139,7 @@ if results_file:
     print(f"\nResults table ({len(all_results)} runs) saved to {results_file}")
 
 # E.1 Non-compliant customers vs penetration
-show(plots.plot_lines_vs_x(PENETRATIONS, {s: r["table"]["n_noncompliant"].tolist() for s, r in results.items()},
+show(plots.plot_lines_vs_x(PENETRATIONS, {s: r["table"]["n_noncompliant_customers"].tolist() for s, r in results.items()},
                            "PV penetration (% of customers)", "Non-compliant customers",
                            "E.1 Customers outside the voltage limits"), "fig_e1_noncompliant.png")
 show(plots.plot_panels({s: r["sims"][-1]["V"] for s, r in results.items()}, "Customer voltage (pu)", limits=LIMITS_PU,
@@ -150,7 +151,7 @@ for season, r in results.items():
     show(plots.plot_panels({"Active power P (kW)": sim["tx_P"].T, "Reactive power Q (kvar)": sim["tx_Q"].T},
                            "kW / kvar", title=f"E.2 Transformer power per phase, {season}, 100 % PV (negative = reverse flow)",
                            labels=["Phase A", "Phase B", "Phase C"]), f"fig_e2_transformer_{season.lower()}.png")
-show(plots.plot_lines_vs_x(PENETRATIONS, {s: r["table"]["utilisation"].tolist() for s, r in results.items()},
+show(plots.plot_lines_vs_x(PENETRATIONS, {s: r["table"]["transformer_utilisation_pct"].tolist() for s, r in results.items()},
                            "PV penetration (% of customers)", "Peak utilisation (%)",
                            f"E.2 Transformer utilisation (rating {TRANSFORMER_RATING_KVA:.0f} kVA)", hline=100),
      "fig_e2_utilisation.png")

@@ -6,4 +6,5 @@ data_confidential/*
 !data_confidential/.gitkeep
 tut_1-1_dss_files
 tut_2_data
+tut_3_data
 *.pyc

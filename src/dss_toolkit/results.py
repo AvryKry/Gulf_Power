@@ -28,7 +28,7 @@ def load_table(path):
     return pd.read_csv(path)
 
 
-SIM_ARRAYS = ("P", "Q", "V", "tx_P", "tx_Q", "der_P", "der_Q")
+SIM_ARRAYS = ("P", "Q", "V", "tx_P", "tx_Q", "der_P", "der_Q", "der_available_P")
 
 
 def save_simulation(sim, path):
@@ -44,5 +44,13 @@ def load_simulation(path):
     """Read a simulation saved with save_simulation() (without its scenario object)."""
     with np.load(path, allow_pickle=False) as f:
         sim = json.loads(str(f["meta"]))
-        sim.update({k: f[k] for k in SIM_ARRAYS})
+        sim.update({k: f[k] for k in SIM_ARRAYS if k in f.files})   # older files lack some arrays
     return sim
+
+
+def save_settings(settings, path):
+    """Save the settings of a study (any dict, e.g. dataclasses.asdict(plan)) as readable JSON,
+    so a results folder always says how it was made."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, indent=2, default=str))

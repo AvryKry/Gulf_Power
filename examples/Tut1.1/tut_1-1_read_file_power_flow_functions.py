@@ -53,7 +53,7 @@ reports.print_element_counts(net.element_counts(engine))
 print("DER already in the files:", net.has_der(engine))
 reports.print_load_inventory(net.load_inventory(engine))
 plots.apply_style()
-plots.show_or_save(plots.plot_network_map(engine, STUB_PREFIXES, "Figure 1. Network"), figure_path("fig1_network.png"))
+plots.save_figure(plots.plot_network_map(engine, STUB_PREFIXES, "Figure 1. Network"), figure_path("fig1_network.png"), show=True)
 
 # ---- 2. Case without PV ----------------------------------------------------------------------
 no_pv = run_case(engine, master_file, [], LABELS[0])
@@ -68,8 +68,8 @@ reports.print_table(["PV", "Bus", "P (kW)", "Q (kvar)"],
 # ---- 4. Comparison ---------------------------------------------------------------------------
 reports.print_comparison(no_pv, with_pv, LABELS, LIMITS_PU)
 cases = [no_pv, with_pv]
-plots.show_or_save(plots.plot_voltage_profiles(cases, LABELS, LIMITS_PU, STUB_PREFIXES, "Figure 2. Voltage profile"), figure_path("fig2_profile.png"))
-plots.show_or_save(plots.plot_node_voltages(cases, LABELS, LIMITS_PU, STUB_PREFIXES, "Figure 3. Node voltages"), figure_path("fig3_nodes.png"))
-plots.show_or_save(plots.plot_voltage_change_map(engine, no_pv, with_pv, STUB_PREFIXES, [s["bus"] for s in PV_SITES],
-                                                 "Figure 4. Voltage change with PV [% of nominal]"), figure_path("fig4_dv_map.png"))
-plots.show_or_save(plots.plot_power_and_loading(cases, LABELS, "Figure 5. Power balance and line loading"), figure_path("fig5_power.png"))
+plots.save_figure(plots.plot_voltage_profiles(cases, LABELS, LIMITS_PU, STUB_PREFIXES, "Figure 2. Voltage profile"), figure_path("fig2_profile.png"), show=True)
+plots.save_figure(plots.plot_node_voltages(cases, LABELS, LIMITS_PU, STUB_PREFIXES, "Figure 3. Node voltages"), figure_path("fig3_nodes.png"), show=True)
+plots.save_figure(plots.plot_voltage_change_map(engine, no_pv, with_pv, STUB_PREFIXES, [s["bus"] for s in PV_SITES],
+                                                 "Figure 4. Voltage change with PV [% of nominal]"), figure_path("fig4_dv_map.png"), show=True)
+plots.save_figure(plots.plot_power_and_loading(cases, LABELS, "Figure 5. Power balance and line loading"), figure_path("fig5_power.png"), show=True)

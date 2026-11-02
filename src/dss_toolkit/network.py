@@ -30,6 +30,15 @@ def element_names(collection):
     return list(collection.AllNames) if collection.Count > 0 else []
 
 
+def class_element_names(engine, class_name):
+    """Names of every element of an OpenDSS class that has no collection of its own in
+    ActiveCircuit, e.g. class_element_names(engine, "InvControl") or "XYCurve"."""
+    circuit = engine.ActiveCircuit
+    if circuit.SetActiveClass(class_name) < 0 or circuit.ActiveClass.Count == 0:
+        return []
+    return list(circuit.ActiveClass.AllNames)
+
+
 def element_bus(engine, element, terminal=0):
     """Bus text of one terminal of an element, e.g. element_bus(engine, 'Load.671a') -> '671.1.2'"""
     engine.ActiveCircuit.SetActiveElement(element)

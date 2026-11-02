@@ -1,5 +1,5 @@
 """Figures. Each plot_* brick creates one figure and returns it; draw_* bricks draw on an
-existing axis so they can be combined. show_or_save() decides what happens to a figure.
+existing axis so they can be combined. save_figure() decides what happens to a figure.
 """
 from pathlib import Path
 
@@ -11,6 +11,8 @@ from . import network as net
 INK, LIMIT = "#52514e", "#e34948"
 PHASE_COLOURS = {1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a"}
 CASE_COLOURS = ["#9a9893", "#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#e87ba4"]
+PV_MODE_COLOURS = {"no_pv": "#9a9893", "pv": "#2a78d6", "pv_volt_watt": "#eb6834", "pv_volt_var": "#1baf7a",
+                   "available": "#52514e"}   # the same colour for a PV mode in every figure
 LINE_WIDTH = {3: 4.0, 2: 2.0, 1: 0.8}
 LOAD_MARKERS = {"3-phase": ("s", 260, 2.0), "phase-to-phase": ("D", 170, 1.5), "1-phase": ("s", 120, 1.2)}
 
@@ -20,14 +22,14 @@ def apply_style():
                          "axes.grid": True, "grid.alpha": 0.3, "font.size": 10})
 
 
-def show_or_save(fig, save_as=None, show=True):
-    """Save the figure (if 'save_as' is a path) and/or show it, then close it. A skipped figure
-    (None) is ignored."""
+def save_figure(fig, file_path=None, show=False):
+    """Save the figure to 'file_path' (folders are created; None = not saved), show it on screen
+    only if 'show', then close it. A skipped figure (None, e.g. a map without coordinates) is ignored."""
     if fig is None:
         return
-    if save_as:
-        Path(save_as).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(save_as, dpi=150, bbox_inches="tight")
+    if file_path:
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
     if show:
         plt.show()
     plt.close(fig)
@@ -291,11 +293,13 @@ def time_labels(n_steps, step_minutes):
     return ticks, [f"{t * step_minutes // 60:02d}:00" for t in ticks]
 
 
-def draw_time_series(ax, profiles, step_minutes, labels=None, styles=None, colour=None, alpha=1.0):
-    """Draw each row of 'profiles' (n_profiles x n_steps) against time of day."""
+def draw_time_series(ax, profiles, step_minutes, labels=None, styles=None, colour=None, alpha=1.0, colours=None):
+    """Draw each row of 'profiles' (n_profiles x n_steps) against time of day; 'colour' for every
+    line, or 'colours' with one colour per line."""
     profiles = np.atleast_2d(profiles)
     for i, row in enumerate(profiles):
-        ax.plot(row, ls=styles[i] if styles else "-", color=colour, alpha=alpha, label=labels[i] if labels else None)
+        ax.plot(row, ls=styles[i] if styles else "-", color=colours[i] if colours else colour, alpha=alpha,
+                label=labels[i] if labels else None)
     ticks, text = time_labels(profiles.shape[1], step_minutes)
     ax.set_xticks(ticks, text, rotation=60)
     ax.set_xlabel("Time (hh:mm)")
@@ -304,10 +308,10 @@ def draw_time_series(ax, profiles, step_minutes, labels=None, styles=None, colou
 
 
 def plot_time_series(profiles, title, ylabel, step_minutes=30, labels=None, styles=None, limits=None, hline=None,
-                     colour=None, alpha=1.0, figsize=(10, 3.5)):
+                     colour=None, alpha=1.0, figsize=(10, 3.5), colours=None):
     """One figure with one line per profile; optional voltage 'limits' or a single 'hline' (e.g. a rating)."""
     fig, ax = plt.subplots(figsize=figsize)
-    draw_time_series(ax, profiles, step_minutes, labels, styles, colour, alpha)
+    draw_time_series(ax, profiles, step_minutes, labels, styles, colour, alpha, colours)
     if limits:
         draw_limits(ax, limits)
     if hline is not None:
@@ -346,4 +350,60 @@ def plot_lines_vs_x(x, series, xlabel, ylabel, title, hline=None, markers=True):
     if hline is not None:
         ax.axhline(hline, color=LIMIT, ls="--", lw=1)
     ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title); ax.legend(); fig.tight_layout()
+    return fig
+
+# --- Ranked days and grouped results (Tutorial 3) ------------------------------------------------
+def plot_pv_day_ranking(pv_profiles_pu, ranked_days, sampled_days, title="PV days ranked by daily peak"):
+    """Left: daily PV peak against rank (0 = highest peak), with the simulated days marked.
+    Right: the PV profiles of the simulated days. sampled_days = [(rank, day)]."""
+    profiles = np.asarray(pv_profiles_pu)
+    peaks = profiles.max(axis=1)[ranked_days]
+    fig, (left, right) = plt.subplots(1, 2, figsize=(13, 4.2), gridspec_kw={"width_ratios": [1, 1.3]})
+    left.plot(np.arange(len(peaks)), peaks, color=INK, lw=1.2)
+    left.plot([r for r, _ in sampled_days], [peaks[r] for r, _ in sampled_days], "o", color="#eda100",
+              label=f"Simulated ({len(sampled_days)} days)")
+    left.set_xlabel("Rank (0 = highest peak)"); left.set_ylabel("Daily PV peak (pu)"); left.legend()
+    colours = plt.cm.viridis(np.linspace(0, 0.9, len(sampled_days)))
+    for (rank, day), colour in zip(sampled_days, colours):
+        right.plot(profiles[day], color=colour, lw=1.2, label=f"rank {rank} (day {day})")
+    ticks, text = time_labels(profiles.shape[1], 24 * 60 // profiles.shape[1])
+    right.set_xticks(ticks, text, rotation=60); right.set_ylabel("PV output (pu)"); right.set_xlabel("Time (hh:mm)")
+    right.legend(fontsize=7, ncol=2, loc="upper left")
+    fig.suptitle(title); fig.tight_layout()
+    return fig
+
+
+def plot_metrics_vs_x(table, x_column, metrics, group_column, title, group_labels=None, xlabel=None,
+                      hlines=None, ncols=2, group_colours=None):
+    """One panel per metric of a results table, one line per group, e.g. every PV mode's highest
+    voltage against PV day rank. metrics = {column: axis label}; group_labels = {group: legend
+    text}; group_colours = {group: colour}; hlines = {column: value} for a reference line."""
+    nrows = int(np.ceil(len(metrics) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6.5 * ncols, 3.6 * nrows), squeeze=False)
+    groups = list(dict.fromkeys(table[group_column]))
+    for ax, (column, label) in zip(axes.flat, metrics.items()):
+        for i, group in enumerate(groups):
+            rows = table[table[group_column] == group].sort_values(x_column)
+            colour = (group_colours or {}).get(group, CASE_COLOURS[i % len(CASE_COLOURS)])
+            ax.plot(rows[x_column], rows[column], "o-", ms=4, lw=1.6, color=colour,
+                    label=(group_labels or {}).get(group, group))
+        if hlines and column in hlines:
+            ax.axhline(hlines[column], color=LIMIT, ls="--", lw=1)
+        ax.set_xlabel(xlabel or x_column); ax.set_ylabel(label)
+    axes.flat[0].legend(fontsize=8)
+    for ax in list(axes.flat)[len(metrics):]:
+        ax.set_visible(False)
+    fig.suptitle(title); fig.tight_layout()
+    return fig
+
+
+def plot_bars(categories, values, ylabel, title, value_format="%.0f", missing_text="below lowest", colours=None):
+    """One bar per category (e.g. hosting capacity per PV mode); None / NaN values are drawn as 0
+    and labelled with 'missing_text'."""
+    fig, ax = plt.subplots(figsize=(1.8 * len(categories) + 3, 4))
+    values = [None if v is None or v != v else v for v in values]          # v != v is True for NaN
+    heights = [0 if v is None else v for v in values]
+    bars = ax.bar(categories, heights, color=colours or [CASE_COLOURS[(i + 1) % len(CASE_COLOURS)] for i in range(len(values))])
+    ax.bar_label(bars, labels=[missing_text if v is None else value_format % v for v in values], fontsize=9)
+    ax.set_ylabel(ylabel); ax.set_title(title); fig.tight_layout()
     return fig

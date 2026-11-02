@@ -1,5 +1,5 @@
-"""Time-series simulation bricks: profile data, putting a scenario's demand and DER into the
-circuit, stepping through time and recording results.
+"""Time-series simulation bricks: profile data, putting a scenario's demand, DER and inverter
+control into the circuit, stepping through time and recording results.
 """
 import numpy as np
 
@@ -7,11 +7,11 @@ from . import der as der_text, engine as eng, extract, network as net
 
 
 # --- Profile data (no OpenDSS needed) ---------------------------------------------------------
-def load_profile_data(path, mmap=False, to_print=False):
-    """Load a .npy profile file (and print its shape if to_print). mmap=True reads it lazily from
+def read_profile_file(path, mmap=False, print_shape=False):
+    """Read a .npy profile file (and print its shape if print_shape). mmap=True reads it lazily from
     disk (for files too large for memory; only the slices used are read)."""
     data = np.load(path, mmap_mode="r" if mmap else None)
-    if to_print:
+    if print_shape:
         print(f"{getattr(path, 'name', path)}: shape {data.shape}")
     return data
 
@@ -62,16 +62,20 @@ def demand_commands(demand, step_minutes):
 
 
 def pv_der_commands(d, load_info, step_minutes):
-    """Commands for one PV DER: its own normalised shape + a PVSystem at the customer's bus."""
+    """Commands for one PV DER: its own normalised shape + a PVSystem at the customer's bus. The
+    inverter may use its full kVA as reactive power (kvarMax), which a volt-var control needs; with
+    no control the PV runs at unity power factor."""
     shape = f"shape_{d.name}"
     return [der_text.loadshape_command(shape, d.profile, interval_minutes=step_minutes, use_actual=False),
             der_text.pv_command(d.name, load_info["bus"], len(net.bus_phases(load_info["bus"])), load_info["kV"],
-                                d.kva, d.pmpp, daily_shape=shape)]
+                                d.kva, d.pmpp, daily_shape=shape, kvar_max=d.kva)]
 
 
 # One command builder per DER kind: add "storage", "ev" ... here as the toolkit grows
 DER_BUILDERS = {"pv": pv_der_commands}
 DER_CLASSES = {"pv": "PVSystem"}
+CONTROL_CLASSES = ("InvControl", "XYCurve")       # control elements a scenario may define
+INVERTER_CONTROL_NAME = "inverter_control"       # name of the InvControl (and its curve) of a scenario
 
 
 def der_commands(der_list, inventory, step_minutes):
@@ -84,11 +88,24 @@ def der_commands(der_list, inventory, step_minutes):
     return commands
 
 
+def inverter_control_commands(control, der_elements):
+    """Commands for a scenario's InverterControl (curve + InvControl acting on 'der_elements');
+    [] when there is no control or no DER."""
+    if control is None or not der_elements:
+        return []
+    curve = f"{INVERTER_CONTROL_NAME}_curve"
+    return [der_text.xy_curve_command(curve, control.voltage_pu, control.output_pu),
+            der_text.inverter_control_command(INVERTER_CONTROL_NAME, control.mode, curve, der_elements)]
+
+
 def existing_der(engine):
-    """Lower-case names ('pvsystem.pv_x') of the DER elements already in the circuit."""
+    """Lower-case names ('pvsystem.pv_x', 'invcontrol.inverter_control') of the DER and control
+    elements already in the circuit."""
     found = set()
     for cls in DER_CLASSES.values():
         found.update(f"{cls.lower()}.{n.lower()}" for n in net.element_names(getattr(engine.ActiveCircuit, cls + "s")))
+    for cls in CONTROL_CLASSES:
+        found.update(f"{cls.lower()}.{n.lower()}" for n in net.class_element_names(engine, cls))
     return found
 
 
@@ -105,20 +122,25 @@ def edit_if_exists(commands, existing):
 
 
 def apply_scenario(engine, scenario):
-    """Give the loads the scenario's demand and add its DER (DER already in the circuit, e.g. when
-    the circuit is reused, are edited instead). Returns the DER element names."""
+    """Give the loads the scenario's demand, add its DER and its inverter control (elements already
+    in the circuit, e.g. when the circuit is reused, are edited instead).
+    Returns (DER element names, control element names)."""
     inventory = net.load_inventory(engine)
     missing = [c for c in scenario.customers if c not in inventory]
     if missing:
         raise KeyError(f"customers not in the circuit: {missing[:5]}")
     step = scenario.window.step_minutes
-    commands = demand_commands(scenario.demand, step) + der_commands(scenario.der, inventory, step)
+    der_elements = [f"{DER_CLASSES[d.kind]}.{d.name}" for d in scenario.der]
+    pv_elements = [e for e, d in zip(der_elements, scenario.der) if d.kind == "pv"]
+    control = inverter_control_commands(scenario.inverter_control, pv_elements)
+    commands = demand_commands(scenario.demand, step) + der_commands(scenario.der, inventory, step) + control
     eng.run_commands(engine, edit_if_exists(commands, existing_der(engine)))
-    return [f"{DER_CLASSES[d.kind]}.{d.name}" for d in scenario.der]
+    return der_elements, [f"InvControl.{INVERTER_CONTROL_NAME}"] if control else []
 
 
-def set_der_enabled(engine, elements, enabled):
-    """Switch DER elements (e.g. 'PVSystem.pv_load_1') on or off without removing them."""
+def set_elements_enabled(engine, elements, enabled):
+    """Switch elements (e.g. 'PVSystem.pv_load_1', 'InvControl.inverter_control') on or off
+    without removing them."""
     eng.run_commands(engine, [f"edit {e} enabled={'yes' if enabled else 'no'}" for e in elements])
 
 

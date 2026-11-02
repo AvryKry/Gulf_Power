@@ -39,7 +39,8 @@ LIMITS_PU = (0.94, 1.10)
 TRANSFORMER_RATING_KVA = 175.0
 STUB_PREFIXES = ()
 PENETRATIONS = [0, 20, 40, 60, 80, 100 ]
-SCENARIO_OPTIONS = dict(seed=9, pv_kva=10.0, pf_range=(0.9, 0.98))
+SCENARIO_OPTIONS = dict(pv_placement_seed=9, load_profile_seed=9, power_factor_seed=9, pv_kva=10.0,
+                        power_factor_range=(0.9, 0.98))
 SIM_DAYS = list(range(242, 260))
 SIM_PV_PENETRATION = 55
 REUSE_CIRCUIT = False                          
@@ -68,11 +69,11 @@ master_file = paths.locate_file(MASTER_FILE_NAME, DATA_FOLDER_NAME, verbose=Fals
 engine = eng.start_engine()
 print(f"Circuit '{eng.compile_circuit(engine, master_file)}' read from {master_file.name}\n")
 plots.apply_style()
-plots.show_or_save(plots.plot_network_map(engine, STUB_PREFIXES, "Figure 1. No PV Network (0% Penetration)", "short"), paths.figure_path("Initial Network Map", RESULTS_FOLDER), show=False)
+plots.save_figure(plots.plot_network_map(engine, STUB_PREFIXES, "Figure 1. No PV Network (0% Penetration)", "short"), paths.output_file_path("Initial Network Map", RESULTS_FOLDER), show=False)
 
 # load the profile data from npy files and  the shape, if final input is True
-data_load = ts.load_profile_data(paths.locate_file(LOAD_DATA_FILE, DATA_FOLDER_NAME, verbose=False), to_print=False)
-data_pv = ts.load_profile_data(paths.locate_file(ANNUAL_PV_FILE, DATA_FOLDER_NAME, verbose=False), to_print=False)
+data_load = ts.read_profile_file(paths.locate_file(LOAD_DATA_FILE, DATA_FOLDER_NAME, verbose=False), print_shape=False)
+data_pv = ts.read_profile_file(paths.locate_file(ANNUAL_PV_FILE, DATA_FOLDER_NAME, verbose=False), print_shape=False)
 
 # NOTE This section is somewhat isolated from the simulation days and the hosting capacity experiment
 # Plot the profile data for PV and load systems
@@ -81,20 +82,20 @@ data_pv = ts.load_profile_data(paths.locate_file(ANNUAL_PV_FILE, DATA_FOLDER_NAM
 # Load profile is printed for all 342 customers, unless the first index is changed
 profile_day = 16
 customer_selection = 95
-plots.show_or_save(plots.plot_time_series(data_load[:, profile_day, :], f"All load profiles, day {profile_day}",
-                            "Active power (kW)", colour="#2a78d6", alpha=0.15), paths.figure_path(f"fig_ALL_load_profiles_day{profile_day}.png", RESULTS_FOLDER), False)
-plots.show_or_save(plots.plot_time_series(data_pv[profile_day, :], f"PV profile, day {profile_day}",
-                            "PV Output (pu)", colour="#d2310d", alpha=0.15), paths.figure_path(f"fig_PV_profile_day{profile_day}.png", RESULTS_FOLDER), False)
+plots.save_figure(plots.plot_time_series(data_load[:, profile_day, :], f"All load profiles, day {profile_day}",
+                            "Active power (kW)", colour="#2a78d6", alpha=0.15), paths.output_file_path(f"fig_ALL_load_profiles_day{profile_day}.png", RESULTS_FOLDER), False)
+plots.save_figure(plots.plot_time_series(data_pv[profile_day, :], f"PV profile, day {profile_day}",
+                            "PV Output (pu)", colour="#d2310d", alpha=0.15), paths.output_file_path(f"fig_PV_profile_day{profile_day}.png", RESULTS_FOLDER), False)
 
 # Initial Simulation Section - Run sequence of selected days in SIM_DAYS
 # with set SIM_PV_PENETRATION and assess the power flow results
 
 # Setup the hosting capacity time series evaluation with the StudySetup data structure
-setup = hosting.StudySetup(master_file=str(master_file), voltage_bases_kv=VOLTAGE_BASES_KV, limits=LIMITS_PU,
+setup = hosting.StudySetup(circuit_source=str(master_file), voltage_bases_kv=VOLTAGE_BASES_KV, limits=LIMITS_PU,
                            transformer_rating_kva=TRANSFORMER_RATING_KVA)
 
 # Setup customers as a list of all Load names
-customers = hosting.study_customers(engine, setup)
+customers = hosting.list_customers(engine, setup)
 
 # Setup scenarios for the simulation days
 # Set simulation pv penetration, can change
@@ -103,29 +104,29 @@ sim_scenarios = [scenario.random_scenario(customers, data_load, data_pv, scenari
 
 # Return a summary table of the sim_scenarios run and a full list of the simulations
 # run which can be accesed and reloaded later
-csv_path = paths.figure_path("simulation_results.csv", RESULTS_FOLDER) 
+csv_path = paths.output_file_path("simulation_results.csv", RESULTS_FOLDER) 
 if csv_path and csv_path.exists():
     csv_path.unlink()
-sim_summary, sim_run_simulations = hosting.run_study(engine, setup, sim_scenarios, csv_path, paths.figure_path("simulations", RESULTS_FOLDER), keep_simulations=True, reuse_circuit=REUSE_CIRCUIT)
+sim_summary, sim_run_simulations = hosting.run_study(engine, setup, sim_scenarios, csv_path, paths.output_file_path("simulations", RESULTS_FOLDER), keep_simulations=True, reuse_circuit=REUSE_CIRCUIT)
 
 # Print the summary table from the run simulations
 # COMMENTED print_summary(sim_summary, f"Part A: days {SIM_DAYS} at {SIM_PV_PENETRATION} % penetration (annual PV data)")
 
 # plot the PV curves across SIM_DAYS
-plots.show_or_save(plots.plot_panels({f"Day {d}": s["V"] for d, s in zip(SIM_DAYS, sim_run_simulations)}, "Customer voltage (pu)",
-                       limits=LIMITS_PU, title=f"Customer voltages, {SIM_PV_PENETRATION} % PV penetration"), paths.figure_path("fig_voltage_profiles_of_sim_days.png", RESULTS_FOLDER), show=False)
+plots.save_figure(plots.plot_panels({f"Day {d}": s["V"] for d, s in zip(SIM_DAYS, sim_run_simulations)}, "Customer voltage (pu)",
+                       limits=LIMITS_PU, title=f"Customer voltages, {SIM_PV_PENETRATION} % PV penetration"), paths.output_file_path("fig_voltage_profiles_of_sim_days.png", RESULTS_FOLDER), show=False)
 
 # plot the voltage curves of the customer buses across SIM_DAYS
-plots.show_or_save(plots.plot_time_series(data_pv[SIM_DAYS], "PV profiles of the simulated days", "PV output (pu)",
-                            labels=[f"Day {d}" for d in SIM_DAYS]), paths.figure_path("fig_pv_profiles_of_sim_days.png", RESULTS_FOLDER), show=False)
+plots.save_figure(plots.plot_time_series(data_pv[SIM_DAYS], "PV profiles of the simulated days", "PV output (pu)",
+                            labels=[f"Day {d}" for d in SIM_DAYS]), paths.output_file_path("fig_pv_profiles_of_sim_days.png", RESULTS_FOLDER), show=False)
 
 # Illustrated the locations of the added PV
 # Added PV only dependent on the Scenario Setup seed and the PV penetration
 # Standard across all days and run simulations
 pv_map_scenario = sim_scenarios[0]
-plots.show_or_save(plots.plot_der_map(engine, pv_map_scenario, STUB_PREFIXES,
+plots.save_figure(plots.plot_der_map(engine, pv_map_scenario, STUB_PREFIXES,
                                       f"Figure 2. PV placement, {SIM_PV_PENETRATION} % penetration", labels="short"),
-                   paths.figure_path(f"Network Map W PV - {SIM_PV_PENETRATION}pct.png", RESULTS_FOLDER), show=False)
+                   paths.output_file_path(f"Network Map W PV - {SIM_PV_PENETRATION}pct.png", RESULTS_FOLDER), show=False)
 
 # Verify correct use of scenario demand with simulated demand (only one selected customer amd simulation to check)
 # Can change the simulation being verified and the customer being verified
@@ -135,14 +136,14 @@ sim_to_check = sim_run_simulations[sim_number_to_check]
 customer = sim_to_check["loads"][customer_to_check]
 scenario_load = sim_to_check["scenario"].demand[customer][0]
 simulated_load = sim_to_check["P"][customer_to_check]
-plots.show_or_save(plots.plot_time_series([scenario_load, simulated_load], f"Demand check, {customer}", "Active power (kW)",
-                            labels=["scenario profile", "simulated (OpenDSS)"], styles=["-", "--"]), paths.figure_path("fig_scenario-simulation_demand_check.png", RESULTS_FOLDER), show=False)
+plots.save_figure(plots.plot_time_series([scenario_load, simulated_load], f"Demand check, {customer}", "Active power (kW)",
+                            labels=["scenario profile", "simulated (OpenDSS)"], styles=["-", "--"]), paths.output_file_path("fig_scenario-simulation_demand_check.png", RESULTS_FOLDER), show=False)
 print(f"Largest difference between scenario and simulated demand of {customer}: {numpy.abs(scenario_load - simulated_load).max():.2e} kW")
 
 ## INCOMPLETE
 ## HOSTING CAPACITY EXERCISE SECTION SECTION
 
 # Establish the results file location for the hosting capacity CSV redsults
-hosting_csv_path = paths.figure_path("hosting_capacity_results.csv", HOSTING_CAP_RES_FOLDER) 
+hosting_csv_path = paths.output_file_path("hosting_capacity_results.csv", HOSTING_CAP_RES_FOLDER) 
 if hosting_csv_path and hosting_csv_path.exists():
     hosting_csv_path.unlink()

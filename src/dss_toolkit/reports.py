@@ -10,11 +10,14 @@ from . import extract
 
 # --- Generic table ---------------------------------------------------------------------------
 def fmt(value, spec):
-    """Format a number with 'spec' (e.g. '.2f'); text and None are returned as text."""
-    if value is None:
+    """Format a number with 'spec' (e.g. '.2f'); text is returned as it is and None / NaN as '-'.
+    A whole-number spec ('d') also accepts floats (pandas stores integer columns with gaps as float)."""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-"
     if isinstance(value, str):
         return value
+    if spec.endswith("d"):
+        return format(int(round(value)), spec)
     return format(round(value, 6) + 0.0 if isinstance(value, float) else value, spec)
 
 
@@ -33,6 +36,13 @@ def print_table(headers, rows, title=None, align=None):
     for r in rows:
         print(row_text(r))
     print(line)
+
+
+def print_summary_table(table, columns, title=None):
+    """Print chosen columns of a results DataFrame. columns = [(header, column, format spec)],
+    e.g. [("PV %", "penetration_pct", "d"), ("V max (pu)", "v_max_pu", ".4f")]."""
+    rows = [[fmt(r[key], spec) for _, key, spec in columns] for r in table.to_dict("records")]
+    print_table([header for header, _, _ in columns], rows, title)
 
 
 # --- Single case -----------------------------------------------------------------------------

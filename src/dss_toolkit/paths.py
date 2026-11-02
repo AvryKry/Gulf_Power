@@ -8,8 +8,10 @@ from pathlib import Path
 
 DEFAULT_ROOT_MARKERS = (".git", ".gitignore", "requirements.txt")
 
-def figure_path(name, figure_folder):
-    return Path(figure_folder) / name if figure_folder else None
+def output_file_path(file_name, output_folder):
+    """Path of an output file (figure, CSV ...) inside 'output_folder', or None when
+    'output_folder' is None (= do not save)."""
+    return Path(output_folder) / file_name if output_folder else None
 
 
 def find_project_root(start=None, markers=DEFAULT_ROOT_MARKERS):
