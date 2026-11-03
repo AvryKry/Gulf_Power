@@ -41,7 +41,7 @@ STUB_PREFIXES = ()
 PENETRATIONS = [0, 20, 40, 60, 80, 100 ]
 SCENARIO_OPTIONS = dict(pv_placement_seed=9, load_profile_seed=9, power_factor_seed=9, pv_kva=10.0,
                         power_factor_range=(0.9, 0.98))
-SIM_DAYS = list(range(242, 260))
+SIM_DAYS = list(range(240, 260))
 SIM_PV_PENETRATION = 55
 REUSE_CIRCUIT = False                          
 VERIFY_REUSE = False                           

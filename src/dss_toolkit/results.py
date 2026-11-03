@@ -54,3 +54,41 @@ def save_settings(settings, path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings, indent=2, default=str))
+
+
+class TimeSeriesAverage:
+    """Running mean, minimum and maximum of simulation time series over many randomized runs,
+    without keeping the simulations. add(key, sim) for every simulation of interest (e.g. key =
+    (penetration, PV mode, PV day rank)); get(key) returns a dict with n_runs and:
+      V_mean, V_min, V_max            customers x steps [pu]
+      pv_P_mean, pv_available_P_mean  total PV active power / what was available, per step [kW]
+      pv_Q_mean                       total PV reactive power per step [kvar]"""
+
+    def __init__(self):
+        self._data = {}
+
+    def add(self, key, sim):
+        v = np.asarray(sim["V"], dtype=float)
+        totals = {"pv_P": sim["der_P"].sum(axis=1), "pv_available_P": sim["der_available_P"].sum(axis=1),
+                  "pv_Q": sim["der_Q"].sum(axis=1)}
+        d = self._data.get(key)
+        if d is None:
+            self._data[key] = {"n": 1, "V_sum": v.copy(), "V_min": v.copy(), "V_max": v.copy(),
+                               **{f"{k}_sum": np.asarray(t, dtype=float).copy() for k, t in totals.items()}}
+            return
+        d["n"] += 1
+        d["V_sum"] += v
+        np.minimum(d["V_min"], v, out=d["V_min"])
+        np.maximum(d["V_max"], v, out=d["V_max"])
+        for k, t in totals.items():
+            d[f"{k}_sum"] += t
+
+    def keys(self):
+        return list(self._data)
+
+    def get(self, key):
+        d = self._data[key]
+        n = d["n"]
+        return {"n_runs": n, "V_mean": d["V_sum"] / n, "V_min": d["V_min"], "V_max": d["V_max"],
+                "pv_P_mean": d["pv_P_sum"] / n, "pv_available_P_mean": d["pv_available_P_sum"] / n,
+                "pv_Q_mean": d["pv_Q_sum"] / n}

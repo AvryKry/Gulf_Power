@@ -10,10 +10,14 @@ Every random choice has its own seed, so each source of randomness can be change
     load_profile_seed   which of the measured load profiles each customer gets
     power_factor_seed   the power factor of each customer at each step (gives kvar from kW)
     load_day_seed       which day of the load data is used (when it is not matched to the PV day)
+    pv_rating_seed      which rating each random PV system gets (from a list of ratings)
+
+A StudyPlan can repeat each penetration over many randomized runs, redrawing any of these items per
+run from one intra_penetration_seed.
 
 Builders:
     random_scenario / penetration_scenarios   one window, PV on a % of customers (Tutorial 2)
-    StudyPlan + plan_scenarios                ranked PV days x PV modes x penetrations (Tutorial 3)
+    StudyPlan + iter_plan_scenarios           runs x ranked PV days x PV modes x penetrations (Tutorial 3)
 Anything else (measured smart-meter data, a hand-made case) can build a Scenario directly.
 """
 import json
@@ -238,21 +242,50 @@ def penetration_scenarios(customers, load_profiles_kw, pv_profiles_pu, window, p
 
 
 # --- Tutorial 3: a study plan made of user selections ----------------------------------------------------
+MAX_RUNS_PER_PENETRATION = 1000          # hard limit on randomized runs per penetration (compute protection)
+REDRAWABLE = ("pv_placement", "pv_rating", "load_day", "load_profile", "power_factor")   # items a run may redraw
+
+
+def assign_pv_ratings(customers, ratings_kva, weights, pv_rating_seed):
+    """{customer: PV rating [kVA]} drawn from 'ratings_kva' with probabilities 'weights' (None = equal),
+    from 'pv_rating_seed' only. Every customer gets a rating, so a customer keeps its rating when a
+    higher penetration adds PV elsewhere."""
+    ratings = np.asarray(ratings_kva, dtype=float)
+    p = None if weights is None else np.asarray(weights, dtype=float) / np.sum(weights)
+    rng = np.random.default_rng(pv_rating_seed)
+    return {c: float(r) for c, r in zip(customers, rng.choice(ratings, size=len(customers), p=p))}
+
+
 @dataclass
 class StudyPlan:
     """Every selection of a ranked-day PV study, in the order a user would make them.
     pv_build: "random" (PV on a % of customers) or "sites" (the 'pv_sites' list).
+    pv_ratings_kva / pv_rating_weights / pv_rating_seed: ratings a random PV system can get.
     penetration_run: "single" (first value of penetrations_pct) or "sweep" (every value); random only.
+    n_runs_per_penetration: randomized runs (cases) per penetration; days_per_run: "all_sampled" or
+    "worst_only"; redraw_*: whether each random item is drawn again for every run (seeds then come
+    from intra_penetration_seed and the run number) or kept from its own seed for every run.
+    Run 0 always uses the items' own seeds, so one run repeats a single-case study exactly.
     pv_modes: any of PV_MODES; inverter_controls: {"volt_watt": InverterControl, "volt_var": ...}.
     rank_interval / include_best_day: which ranked PV days are simulated (see sample_ranked_days)."""
     circuit_name: str
     pv_build: str
     pv_modes: tuple
-    pv_rating_kva: float = 10.0
+    pv_ratings_kva: tuple = (10.0,)
+    pv_rating_weights: tuple = None
+    pv_rating_seed: int = 1
     pv_placement_seed: int = 1
     pv_sites: list = field(default_factory=list)
     penetration_run: str = "single"
     penetrations_pct: tuple = (100,)
+    n_runs_per_penetration: int = 1
+    days_per_run: str = "all_sampled"
+    redraw_pv_placement: bool = True
+    redraw_pv_rating: bool = True
+    redraw_load_day: bool = False
+    redraw_load_profile: bool = True
+    redraw_power_factor: bool = True
+    intra_penetration_seed: int = 1
     inverter_controls: dict = field(default_factory=dict)
     rank_interval: int = 25
     include_best_day: bool = True
@@ -271,6 +304,14 @@ class StudyPlan:
             raise ValueError(f"pv_modes must be 1 to 4 of {list(PV_MODES)}, not {self.pv_modes!r}")
         if self.pv_build == "sites" and not self.pv_sites:
             raise ValueError("pv_build='sites' needs at least one entry in pv_sites")
+        if not 1 <= self.n_runs_per_penetration <= MAX_RUNS_PER_PENETRATION:
+            raise ValueError(f"n_runs_per_penetration must be 1 to {MAX_RUNS_PER_PENETRATION}, not {self.n_runs_per_penetration}")
+        if self.days_per_run not in ("all_sampled", "worst_only"):
+            raise ValueError(f"days_per_run must be 'all_sampled' or 'worst_only', not {self.days_per_run!r}")
+        if not self.pv_ratings_kva:
+            raise ValueError("pv_ratings_kva needs at least one rating")
+        if self.pv_rating_weights is not None and len(self.pv_rating_weights) != len(self.pv_ratings_kva):
+            raise ValueError("pv_rating_weights needs one weight per rating in pv_ratings_kva")
 
     @property
     def is_sweep(self):
@@ -293,43 +334,109 @@ class StudyPlan:
     def load_day_selection(self):
         return "matched" if self.use_matched_load_day else "independent"
 
+    def redraws(self, item):
+        """True if 'item' (one of REDRAWABLE) is drawn again for every run. Placement and ratings only
+        apply to a random build, the load day only when it is not matched to the PV day."""
+        if item in ("pv_placement", "pv_rating") and self.pv_build != "random":
+            return False
+        if item == "load_day" and self.use_matched_load_day:
+            return False
+        return bool(getattr(self, f"redraw_{item}"))
 
-def plan_pv_fleet(plan, customers, pv_profile, penetration_pct):
-    """The PV fleet of a plan for one penetration (random build) or its site list."""
+    def notes(self):
+        """Settings that have no effect with the other choices (printed by the scripts)."""
+        notes = []
+        if self.redraw_load_day and self.use_matched_load_day:
+            notes.append("redraw_load_day is ignored: the load day is matched to the PV day")
+        if self.pv_build == "sites" and (self.redraw_pv_placement or self.redraw_pv_rating):
+            notes.append("redraw_pv_placement / redraw_pv_rating are ignored for a PV site list")
+        if self.n_runs_per_penetration > 1 and not any(self.redraws(i) for i in REDRAWABLE):
+            notes.append("nothing is redrawn between runs: every run of a penetration is identical")
+        return notes
+
+    def run_seeds(self, run_index):
+        """{item: seed} used by run 'run_index'. Run 0 and items that are not redrawn use their own
+        seed; a redrawn item's seed for runs 1, 2 ... comes from intra_penetration_seed, the run
+        number and the item only, so redrawing one item never changes another."""
+        own = {"pv_placement": self.pv_placement_seed, "pv_rating": self.pv_rating_seed, "load_day": self.load_day_seed,
+               "load_profile": self.load_profile_seed, "power_factor": self.power_factor_seed}
+        seeds = {}
+        for code, item in enumerate(REDRAWABLE):
+            if run_index > 0 and self.redraws(item):
+                seeds[item] = int(np.random.SeedSequence([self.intra_penetration_seed, run_index, code]).generate_state(1)[0])
+            else:
+                seeds[item] = own[item]
+        return seeds
+
+    def n_scenarios(self, n_sampled_days):
+        """Number of daily simulations the plan makes."""
+        days = 1 if self.days_per_run == "worst_only" else n_sampled_days
+        per_day = sum(len(self.penetrations_for(m)) for m in self.pv_modes)
+        return self.n_runs_per_penetration * days * per_day
+
+
+def plan_pv_fleet(plan, customers, pv_profile, penetration_pct, run_index=0):
+    """The PV fleet of one run of a plan for one penetration (random build), or its site list."""
     if plan.pv_build == "sites":
         return pv_fleet_from_sites(plan.pv_sites, pv_profile, customers)
-    return pv_fleet(random_pv_customers(customers, penetration_pct, plan.pv_placement_seed), pv_profile,
-                    plan.pv_rating_kva)
+    seeds = plan.run_seeds(run_index)
+    ratings = assign_pv_ratings(customers, plan.pv_ratings_kva, plan.pv_rating_weights, seeds["pv_rating"])
+    return [DER("pv", c, ratings[c], np.asarray(pv_profile))
+            for c in random_pv_customers(customers, penetration_pct, seeds["pv_placement"])]
 
 
-def plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, steps_per_day=48, step_minutes=30):
-    """Every scenario of a StudyPlan: for each sampled PV day (worst to best), each PV mode and
-    each penetration. "no_pv" runs once per day. Returns (scenarios, [(rank, pv_day)])."""
-    sampled_days = sample_ranked_days(rank_pv_days(pv_profiles_pu), plan.rank_interval, plan.include_best_day)
-    load_days = choose_load_days([day for _, day in sampled_days], plan.use_matched_load_day,
-                                 load_profiles_kw.shape[1], plan.load_day_seed)
-    profile_index = assign_load_profiles(customers, load_profiles_kw.shape[0], plan.load_profile_seed)
-    scenarios = []
-    for (rank, pv_day), load_day in zip(sampled_days, load_days):
-        pv_window = TimeWindow.days(pv_day, steps_per_day=steps_per_day, step_minutes=step_minutes)
-        load_window = TimeWindow.days(load_day, steps_per_day=steps_per_day, step_minutes=step_minutes)
-        pv_profile = ts.profiles_in_window(pv_profiles_pu, pv_window)
-        demand = build_demand(profile_index, load_profiles_kw, load_window, plan.power_factor_seed,
-                              plan.power_factor_range)
-        for pv_mode in plan.pv_modes:
-            for penetration_pct in plan.penetrations_for(pv_mode):
-                fleet = [] if pv_mode == "no_pv" else plan_pv_fleet(plan, customers, pv_profile, penetration_pct)
-                tags = {"circuit": plan.circuit_name, "pv_build": plan.pv_build, "pv_mode": pv_mode,
-                        "penetration_pct": penetration_pct, "n_pv_systems": len(fleet),
-                        "pv_total_kva": sum(d.kva for d in fleet), "pv_rank": rank, "pv_day": pv_day,
-                        "pv_peak_pu": float(pv_profile.max()), "load_day_selection": plan.load_day_selection,
-                        "load_day": load_day, "window": pv_window.label,
-                        "pv_placement_seed": plan.pv_placement_seed if plan.pv_build == "random" else None,
-                        "load_profile_seed": plan.load_profile_seed, "power_factor_seed": plan.power_factor_seed,
-                        "load_day_seed": None if plan.use_matched_load_day else plan.load_day_seed}
-                scenario = Scenario(pv_window, demand, fleet, tags)
-                scenarios.append(scenario.with_pv_mode(pv_mode, plan.inverter_controls))
-    return scenarios, sampled_days
+def plan_days(plan, pv_profiles_pu):
+    """[(rank, pv_day)] simulated by the plan (all sampled days, or only rank 0)."""
+    sampled = sample_ranked_days(rank_pv_days(pv_profiles_pu), plan.rank_interval, plan.include_best_day)
+    return sampled[:1] if plan.days_per_run == "worst_only" else sampled
+
+
+def iter_plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases=None,
+                        steps_per_day=48, step_minutes=30):
+    """Every scenario of a StudyPlan, one at a time (a large study never holds them all in memory):
+    for each run, each simulated PV day (worst to best), each PV mode and each penetration.
+    "no_pv" runs once per run and day. With 'customer_phases' ({customer: "A"/"B"/"C"}, from
+    network.customer_phases) the tags also give the installed PV per phase."""
+    sampled_days = plan_days(plan, pv_profiles_pu)
+    for run_index in range(plan.n_runs_per_penetration):
+        seeds = plan.run_seeds(run_index)
+        load_days = choose_load_days([day for _, day in sampled_days], plan.use_matched_load_day,
+                                     load_profiles_kw.shape[1], seeds["load_day"])
+        profile_index = assign_load_profiles(customers, load_profiles_kw.shape[0], seeds["load_profile"])
+        for (rank, pv_day), load_day in zip(sampled_days, load_days):
+            pv_window = TimeWindow.days(pv_day, steps_per_day=steps_per_day, step_minutes=step_minutes)
+            load_window = TimeWindow.days(load_day, steps_per_day=steps_per_day, step_minutes=step_minutes)
+            pv_profile = ts.profiles_in_window(pv_profiles_pu, pv_window)
+            demand = build_demand(profile_index, load_profiles_kw, load_window, seeds["power_factor"],
+                                  plan.power_factor_range)
+            for pv_mode in plan.pv_modes:
+                for penetration_pct in plan.penetrations_for(pv_mode):
+                    fleet = [] if pv_mode == "no_pv" else plan_pv_fleet(plan, customers, pv_profile, penetration_pct, run_index)
+                    tags = {"circuit": plan.circuit_name, "pv_build": plan.pv_build, "pv_mode": pv_mode,
+                            "penetration_pct": penetration_pct, "random_run": run_index, "n_pv_systems": len(fleet),
+                            "pv_total_kva": sum(d.kva for d in fleet), "pv_rank": rank, "pv_day": pv_day,
+                            "pv_peak_pu": float(pv_profile.max()), "load_day_selection": plan.load_day_selection,
+                            "load_day": load_day, "window": pv_window.label}
+                    if customer_phases is not None:
+                        kva = {ph: sum(d.kva for d in fleet if customer_phases.get(d.customer) == ph) for ph in "ABC"}
+                        tags.update({f"pv_kva_phase_{ph.lower()}": kva[ph] for ph in "ABC"})
+                        tags["pv_kva_phase_spread"] = max(kva.values()) - min(kva.values())
+                    tags.update({
+                        "pv_placement_seed": seeds["pv_placement"] if plan.pv_build == "random" else None,
+                        "pv_rating_seed": seeds["pv_rating"] if plan.pv_build == "random" else None,
+                        "load_profile_seed": seeds["load_profile"], "power_factor_seed": seeds["power_factor"],
+                        "load_day_seed": None if plan.use_matched_load_day else seeds["load_day"]})
+                    scenario = Scenario(pv_window, demand, fleet, tags)
+                    yield scenario.with_pv_mode(pv_mode, plan.inverter_controls)
+
+
+def plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases=None, steps_per_day=48,
+                   step_minutes=30):
+    """All scenarios of a plan as a list (for small plans; see iter_plan_scenarios).
+    Returns (scenarios, [(rank, pv_day)])."""
+    scenarios = list(iter_plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases,
+                                         steps_per_day, step_minutes))
+    return scenarios, plan_days(plan, pv_profiles_pu)
 
 
 # --- Saving and loading --------------------------------------------------------------------------

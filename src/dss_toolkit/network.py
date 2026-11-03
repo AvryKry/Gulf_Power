@@ -128,6 +128,35 @@ def load_inventory(engine):
     return inventory
 
 
+def bus_nodes_from_text(bus_text):
+    """Node numbers written after a bus name, in order ('632.1.3' -> [1, 3]); none written = [1, 2, 3]."""
+    nodes = [int(n) for n in bus_text.split(".")[1:] if n != "0"]
+    return nodes or [1, 2, 3]
+
+
+def customer_phases(engine, max_depth=50):
+    """{load: "A" / "B" / "C"} - the feeder phase each single-phase load is really on, found by
+    following the lines that feed its bus back towards the source (a house bus is often written
+    as node .1 whatever phase its service line taps). Loads on more than one phase give e.g. "ABC"."""
+    feeding = {}
+    lines = engine.ActiveCircuit.Lines
+    for name in element_names(lines):
+        lines.Name = name
+        feeding[bus_name(lines.Bus2).lower()] = (lines.Bus1, lines.Bus2)
+    phases = {}
+    for load, info in load_inventory(engine).items():
+        bus, nodes = bus_name(info["bus"]).lower(), sorted(bus_phases(info["bus"]))
+        for _ in range(max_depth):
+            if bus not in feeding:
+                break
+            upstream, downstream = feeding[bus]
+            up_nodes, down_nodes = bus_nodes_from_text(upstream), bus_nodes_from_text(downstream)
+            nodes = [up_nodes[down_nodes.index(n)] for n in nodes if n in down_nodes and down_nodes.index(n) < len(up_nodes)]
+            bus = bus_name(upstream).lower()
+        phases[load] = "".join("ABC"[n - 1] for n in sorted(set(nodes)) if 1 <= n <= 3) or "?"
+    return phases
+
+
 def load_bus_types(engine):
     """{bus: '3-phase' | 'phase-to-phase' | '1-phase'} from the phases used by all loads at a bus."""
     phases, delta = {}, {}

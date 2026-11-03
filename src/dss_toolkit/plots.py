@@ -164,16 +164,28 @@ def der_at_buses(engine, scenario):
     return found
 
 
-def draw_der(ax, engine, scenario, base_size=260, layer_step=1.7, lw=1.6, show_counts=True):
+PV_PHASE_COLOURS = {"A": "#2a78d6", "B": "#eb6834", "C": "#1baf7a"}   # PV outline colour by feeder phase
+
+
+def draw_der(ax, engine, scenario, base_size=260, layer_step=1.7, lw=1.6, show_counts=True, customer_phases=None):
     """Mark every DER of a scenario at its customer's bus as an unfilled outline (the bus and load
     markers stay visible). Several kinds on one bus are nested outlines, each 'layer_step' times the
-    area of the one inside it; more than one unit of a kind on a bus is labelled e.g. '2x'."""
+    area of the one inside it; more than one unit of a kind on a bus is labelled e.g. '2x'.
+    With 'customer_phases' ({load: "A"/"B"/"C"}) PV outlines are coloured by phase (PV_PHASE_COLOURS)."""
     order = list(DER_STYLES)
+    pv_phase_at_bus = {}
+    if customer_phases:
+        inventory = net.load_inventory(engine)
+        for d in scenario.der:
+            if d.kind == "pv":
+                pv_phase_at_bus[net.bus_name(inventory[d.customer]["bus"])] = customer_phases.get(d.customer)
     for bus, kinds in der_at_buses(engine, scenario).items():
         x, y = net.bus_xy(engine, bus)
         ranked = sorted(kinds, key=lambda k: order.index(k) if k in order else len(order))
         for layer, kind in enumerate(ranked):
             marker, colour, _ = der_style(kind)
+            if kind == "pv" and pv_phase_at_bus.get(bus) in PV_PHASE_COLOURS:
+                colour = PV_PHASE_COLOURS[pv_phase_at_bus[bus]]
             ax.scatter(x, y, marker=marker, s=base_size * layer_step ** layer, facecolors="none",
                        edgecolors=colour, lw=lw, zorder=4 + layer)
             count = kinds[kind][0]
@@ -182,9 +194,10 @@ def draw_der(ax, engine, scenario, base_size=260, layer_step=1.7, lw=1.6, show_c
                             fontsize=7, color=colour, ha="right", zorder=6)
 
 
-def plot_der_map(engine, scenario, exclude=(), title=None, labels="short"):
+def plot_der_map(engine, scenario, exclude=(), title=None, labels="short", customer_phases=None):
     """Network map with the scenario's DER (PV, batteries, ...) marked as outlines where they were
-    placed. Returns None if the circuit has no bus coordinates."""
+    placed. With 'customer_phases' the PV is coloured by the phase it is connected to, and the legend
+    gives the number and kVA of PV on each phase. Returns None if the circuit has no bus coordinates."""
     if not net.has_coordinates(engine, exclude):
         print("No bus coordinates in this circuit: the DER map is skipped.")
         return None
@@ -192,11 +205,17 @@ def plot_der_map(engine, scenario, exclude=(), title=None, labels="short"):
     draw_branches(ax, engine, exclude)
     draw_buses(ax, engine, exclude, labels=labels)
     draw_loads_and_capacitors(ax, engine)
-    draw_der(ax, engine, scenario)
+    draw_der(ax, engine, scenario, customer_phases=customer_phases)
     draw_map_legend(ax)
     for kind in sorted({d.kind for d in scenario.der}, key=lambda k: list(DER_STYLES).index(k) if k in DER_STYLES else 99):
         marker, colour, label = der_style(kind)
         units = [d for d in scenario.der if d.kind == kind]
+        if kind == "pv" and customer_phases:
+            for phase, phase_colour in PV_PHASE_COLOURS.items():
+                on_phase = [d for d in units if customer_phases.get(d.customer) == phase]
+                ax.scatter([], [], marker=marker, s=140, facecolors="none", edgecolors=phase_colour, lw=1.6,
+                           label=f"PV on phase {phase} ({len(on_phase)} x, {sum(d.kva for d in on_phase):.1f} kVA)")
+            continue
         ax.scatter([], [], marker=marker, s=140, facecolors="none", edgecolors=colour, lw=1.6,
                    label=f"{label} ({len(units)} x, {sum(d.kva for d in units):.0f} kVA total)")
     ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.02), ncol=4, frameon=False)
@@ -397,13 +416,43 @@ def plot_metrics_vs_x(table, x_column, metrics, group_column, title, group_label
     return fig
 
 
-def plot_bars(categories, values, ylabel, title, value_format="%.0f", missing_text="below lowest", colours=None):
+def plot_bars(categories, values, ylabel, title, value_format="%.0f", missing_text="below lowest", colours=None,
+              notes=None, footnote=None):
     """One bar per category (e.g. hosting capacity per PV mode); None / NaN values are drawn as 0
-    and labelled with 'missing_text'."""
-    fig, ax = plt.subplots(figsize=(1.8 * len(categories) + 3, 4))
+    and labelled with 'missing_text'. 'notes' = one extra text line per bar, under its label
+    (e.g. how many runs passed); 'footnote' = a line of text under the chart."""
+    fig, ax = plt.subplots(figsize=(2.2 * len(categories) + 3, 4.6))
+    if notes:
+        categories = [f"{c}\n{n}" for c, n in zip(categories, notes)]
     values = [None if v is None or v != v else v for v in values]          # v != v is True for NaN
     heights = [0 if v is None else v for v in values]
     bars = ax.bar(categories, heights, color=colours or [CASE_COLOURS[(i + 1) % len(CASE_COLOURS)] for i in range(len(values))])
     ax.bar_label(bars, labels=[missing_text if v is None else value_format % v for v in values], fontsize=9)
-    ax.set_ylabel(ylabel); ax.set_title(title); fig.tight_layout()
+    ax.set_ylabel(ylabel); ax.set_title(title)
+    if footnote:
+        fig.text(0.01, 0.01, footnote, fontsize=8, color=INK, ha="left", va="bottom")
+    fig.tight_layout(rect=(0, 0.05 if footnote else 0, 1, 1))
+    return fig
+
+
+def plot_voltage_bands(panel_data, limits=None, step_minutes=30, title="", ncols=2, colour="#2a78d6"):
+    """Customer voltages averaged over randomized runs, with the range seen across all runs.
+    panel_data = {panel title: (V_mean, V_min, V_max)}, each customers x steps [pu]: one thin line per
+    customer's mean, and a shaded band from the lowest to the highest customer voltage of any run."""
+    n = len(panel_data)
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 3.4 * nrows), sharey=True, squeeze=False)
+    for ax, (name, (v_mean, v_min, v_max)) in zip(axes.flat, panel_data.items()):
+        steps = np.arange(np.asarray(v_mean).shape[1])
+        ax.fill_between(steps, np.min(v_min, axis=0), np.max(v_max, axis=0), color=colour, alpha=0.15, lw=0,
+                        label="range over all runs")
+        draw_time_series(ax, v_mean, step_minutes, colour=colour, alpha=0.6)
+        ax.plot([], [], color=colour, alpha=0.6, label="customer mean over runs")
+        if limits:
+            draw_limits(ax, limits)
+        ax.set_title(name); ax.set_ylabel("Customer voltage (pu)")
+    axes.flat[0].legend(fontsize=8, loc="lower left")
+    for ax in list(axes.flat)[n:]:
+        ax.set_visible(False)
+    fig.suptitle(title); fig.tight_layout()
     return fig
