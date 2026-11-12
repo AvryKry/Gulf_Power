@@ -456,3 +456,40 @@ def plot_voltage_bands(panel_data, limits=None, step_minutes=30, title="", ncols
         ax.set_visible(False)
     fig.suptitle(title); fig.tight_layout()
     return fig
+
+
+# --- Spread over randomized runs (Tutorial 4) -----------------------------------------------------
+def plot_box_by_group(table, value_column, ylabel, title, x_column="penetration_pct", group_column="pv_mode",
+                      group_labels=None, group_colours=None, hline=None, xlabel="PV penetration (% of customers)"):
+    """Box plot of one result column: one cluster of boxes per x value (e.g. penetration), one box per
+    group (e.g. PV mode) inside it, each box = every row of that x and group (e.g. all day-cases of
+    all runs). Boxes show the median, quartiles and whiskers (1.5 x IQR); points beyond are outliers.
+    'hline' = reference line (e.g. 100 % rating). Returns None if the column has no values."""
+    data = table.dropna(subset=[value_column])
+    if data.empty:
+        return None
+    xs = sorted(data[x_column].dropna().unique())
+    groups = list(dict.fromkeys(data[group_column]))
+    width = 0.8 / max(len(groups), 1)
+    fig, ax = plt.subplots(figsize=(max(7, 1.3 * len(xs) * max(len(groups), 1) / 2 + 3), 4.6))
+    for g, group in enumerate(groups):
+        rows = data[data[group_column] == group]
+        values = [rows.loc[rows[x_column] == x, value_column].values for x in xs]
+        positions = [i - 0.4 + width * (g + 0.5) for i in range(len(xs))]
+        keep = [(p, v) for p, v in zip(positions, values) if len(v)]
+        if not keep:
+            continue
+        colour = (group_colours or {}).get(group, CASE_COLOURS[g % len(CASE_COLOURS)])
+        box = ax.boxplot([v for _, v in keep], positions=[p for p, _ in keep], widths=width * 0.85, patch_artist=True,
+                         medianprops=dict(color=INK, lw=1.2), flierprops=dict(marker=".", markersize=3, alpha=0.5),
+                         whiskerprops=dict(color=colour), capprops=dict(color=colour))
+        for patch in box["boxes"]:
+            patch.set(facecolor=colour, alpha=0.55, edgecolor=colour)
+        ax.plot([], [], "s", color=colour, alpha=0.7, label=(group_labels or {}).get(group, group))
+    if hline is not None:
+        ax.axhline(hline, color=LIMIT, ls="--", lw=1)
+    ax.set_xticks(range(len(xs)), [f"{x:g}" for x in xs])
+    ax.set_xlabel(xlabel); ax.set_ylabel(ylabel); ax.set_title(title)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig

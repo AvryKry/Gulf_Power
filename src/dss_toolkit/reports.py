@@ -207,3 +207,69 @@ def show_structure(obj, name="results", indent=0, max_items=2):
         show_structure(obj[0], "[0]", indent + 1, max_items)
     else:
         print(f"{pad}{name}: {type(obj).__name__} = {obj!r}")
+
+
+# --- Network checks (safe to share) ---------------------------------------------------------------
+class Anonymiser:
+    """Replaces names with stable codes ('bus_0001', 'load_0042' ...) so printed output can be shared
+    without revealing confidential network data. The same name always gets the same code within
+    one run. enabled=False returns names unchanged."""
+
+    def __init__(self, enabled=True):
+        self.enabled = enabled
+        self._codes = {}
+
+    def __call__(self, name, kind="name"):
+        if not self.enabled or name is None:
+            return name
+        key = (kind, str(name).lower())
+        if key not in self._codes:
+            self._codes[key] = f"{kind}_{sum(1 for k in self._codes if k[0] == kind) + 1:04d}"
+        return self._codes[key]
+
+    def text(self, message, replacements=()):
+        """Message with every known name (and each path in 'replacements') replaced."""
+        if not self.enabled:
+            return message
+        out = str(message)
+        for path in replacements:
+            out = out.replace(str(path), "<data folder>")
+        for (kind, name), code in sorted(self._codes.items(), key=lambda kv: -len(kv[0][1])):
+            out = out.replace(name, code)
+        return out
+
+
+def check_line(status, label, detail=""):
+    """One check: PASS / WARN / FAIL, a label and details."""
+    print(f"  [{status:4s}] {label}{(': ' + detail) if detail else ''}")
+
+
+def print_network_checks(info, coords_share, anonymise=None):
+    """Summary of a topology.NetworkInfo with PASS / WARN / FAIL lines, using only counts and
+    anonymised names, so it can be shared. coords_share = share of buses with coordinates (0-1)."""
+    anon = anonymise or Anonymiser(False)
+    from collections import Counter
+    kinds = Counter(a.kind for a in info.assets)
+    phases = Counter(info.load_phases.values())
+    levels = sorted({round(v, 3) for v in info.bus_kv_ll.values() if v > 0}, reverse=True)
+    no_base = sum(1 for v in info.bus_kv_ll.values() if v == 0)
+    print(f"\nNetwork '{anon(info.circuit_name, 'circuit')}'")
+    check_line("PASS", "source bus", anon(info.source_bus, "bus"))
+    check_line("PASS" if info.buses else "FAIL", "buses", f"{len(info.buses)}")
+    check_line("PASS" if levels else "FAIL", "voltage levels (kV line-to-line)", ", ".join(f"{v:g}" for v in levels) or "none")
+    check_line("PASS" if no_base == 0 else "WARN", "buses without a voltage base", f"{no_base}"
+               + (" (set VOLTAGE_BASES_KV, or SetkVBase in the data)" if no_base else ""))
+    check_line("PASS" if info.base_case_solved else "WARN", "test power flow (no PV, loads as in the files)",
+               "converged" if info.base_case_solved else "did NOT converge - check sources, voltage bases, isolated parts")
+    check_line("PASS" if not info.islands else "WARN", "parts not connected to the source",
+               f"{len(info.islands)}" + (f" ({sum(len(i) for i in info.islands)} buses)" if info.islands else ""))
+    check_line("PASS" if kinds.get("head_transformer") else "WARN", "head (substation) transformers", f"{kinds.get('head_transformer', 0)}")
+    check_line("PASS", "other transformers", f"{kinds.get('transformer', 0)}")
+    check_line("PASS", "rated lines (MV / LV)", f"{kinds.get('mv_line', 0)} / {kinds.get('lv_line', 0)}")
+    unrated = sum(1 for e, *_ in info.branches if e.startswith("line.")) - kinds.get("mv_line", 0) - kinds.get("lv_line", 0)
+    check_line("PASS" if unrated <= 0 else "WARN", "lines without a rating in the data (not checked)", f"{max(unrated, 0)}")
+    check_line("PASS" if info.loads else "FAIL", "loads", f"{len(info.loads)} (" + ", ".join(f"{k}: {v}" for k, v in sorted(phases.items())) + ")")
+    check_line("PASS", "loads with a fixed shape", f"{len(info.fixed_loads)}")
+    check_line("PASS", "single-phase customers whose phase can be randomized", f"{len(info.tap_points)}")
+    check_line("PASS" if coords_share >= 0.999 else ("WARN" if coords_share > 0 else "PASS"), "buses with coordinates in the data",
+               f"{100 * coords_share:.1f} %" + ("" if coords_share >= 0.999 else " (the rest are placed automatically)"))

@@ -47,12 +47,58 @@ def set_voltage_bases(engine, voltage_bases_kv):
     run_commands(engine, [f"Set VoltageBases=[{bases}]", "CalcVoltageBases"])
 
 
+DSS_COMMAND_WORDS = ("setbusxy", "setkvbase", "buscoords", "redirect", "compile", "new", "edit", "set", "makebuslist")
+
+
+def is_dss_command_file(path):
+    """True if the first meaningful line of a file is an OpenDSS command (e.g. 'SetBusXY ...'),
+    False for a plain 'bus, x, y' list."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            text = line.strip()
+            if text and not text.startswith(("!", "//", "#")):
+                return text.split()[0].lower().rstrip(",") in DSS_COMMAND_WORDS
+    return False
+
+
 def bus_coordinate_commands(bus_coordinates):
-    """Commands that give the buses map coordinates. 'bus_coordinates' is the path of a
-    coordinates file (lines 'bus, x, y') or a dict {bus: (x, y)}."""
+    """Commands that give the buses map coordinates. 'bus_coordinates' is a dict {bus: (x, y)}, a
+    plain coordinates file (lines 'bus, x, y'), or a file of OpenDSS commands (e.g. SetBusXY /
+    SetkVBase lines, which is how some utility exports write them); the format is detected."""
     if isinstance(bus_coordinates, dict):
         return ["MakeBusList"] + [f"SetBusXY bus={bus} x={x} y={y}" for bus, (x, y) in bus_coordinates.items()]
-    return ["MakeBusList", f'Buscoords "{Path(bus_coordinates)}"']
+    path = Path(bus_coordinates)
+    if is_dss_command_file(path):
+        return ["MakeBusList", f'Redirect "{path}"']
+    return ["MakeBusList", f'Buscoords "{path}"']
+
+
+def apply_bus_coordinates(engine, bus_coordinates):
+    """Give the buses map coordinates (see bus_coordinate_commands) and return the number of lines
+    skipped because their bus is not in the circuit (common in utility exports, which may list
+    buses of parts left out of the model). A file of OpenDSS commands is run one line at a time;
+    any other error stops with the file name and line number. A list applies several sources in
+    order, e.g. [utility file (with SetkVBase lines), {bus: (x, y)} for the buses it misses]."""
+    if isinstance(bus_coordinates, (list, tuple)):
+        return sum(apply_bus_coordinates(engine, source) for source in bus_coordinates if source)
+    if isinstance(bus_coordinates, dict) or not is_dss_command_file(bus_coordinates):
+        run_commands(engine, bus_coordinate_commands(bus_coordinates))
+        return 0
+    run_commands(engine, ["MakeBusList"])
+    skipped = 0
+    with open(bus_coordinates, encoding="utf-8", errors="replace") as f:
+        for number, line in enumerate(f, start=1):
+            text = line.strip()
+            if not text or text.startswith(("!", "//", "#")):
+                continue
+            try:
+                engine.Text.Command = text
+            except Exception as error:
+                if "not found" in str(error).lower():
+                    skipped += 1
+                    continue
+                raise RuntimeError(f"{Path(bus_coordinates).name}, line {number}: {error}") from None
+    return skipped
 
 
 def set_snapshot_mode(engine, max_control_iterations=1000):
@@ -66,15 +112,18 @@ def set_daily_mode(engine, step_minutes, max_control_iterations=1000):
                           "Set hour=0", f"Set MaxControlIter={max_control_iterations}"])
 
 
-def build_circuit(engine, circuit_source, voltage_bases_kv, extra_commands=(), bus_coordinates=None):
+def build_circuit(engine, circuit_source, voltage_bases_kv=None, extra_commands=(), bus_coordinates=None):
     """Create the circuit (master file or command list), add/modify elements with
-    'extra_commands' (e.g. PV systems or corrections), set the voltage bases and, if given, the
-    bus coordinates (file path or {bus: (x, y)}). Return the circuit name."""
+    'extra_commands' (e.g. PV systems or corrections), set the voltage bases (None = leave them to
+    the circuit files, e.g. a 'Set VoltageBases' line or per-bus SetkVBase commands) and, if given,
+    the bus coordinates (applied last, so per-bus kV bases in a coordinates file are kept).
+    Returns the circuit name."""
     name = compile_circuit(engine, circuit_source)
     run_commands(engine, extra_commands)
-    set_voltage_bases(engine, voltage_bases_kv)
+    if voltage_bases_kv:
+        set_voltage_bases(engine, voltage_bases_kv)
     if bus_coordinates:
-        run_commands(engine, bus_coordinate_commands(bus_coordinates))
+        apply_bus_coordinates(engine, bus_coordinates)
     return name
 
 

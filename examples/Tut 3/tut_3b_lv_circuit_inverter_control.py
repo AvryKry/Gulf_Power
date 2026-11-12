@@ -58,7 +58,7 @@ PV_PROFILE_FILE_NAME = "Residential PV data 30-min resolution.npy"       # (365 
 
 # ---- 3. PV build: "random" (PV on a % of customers) or "sites" (the PV_SITES list) ----------
 PV_BUILD = "random"
-PV_RATINGS_KVA = (10.0, 16.6, 30.0)                            # random build: ratings a PV system can get (kVA = Pmpp)
+PV_RATINGS_KVA = (10.0, 15, 20.0)                            # random build: ratings a PV system can get (kVA = Pmpp)
 PV_RATING_WEIGHTS = (1, 1, 2)                                # chance of each rating (None = equal chances)
 PV_RATING_SEED = 1                                           # random build: which rating each PV gets
 PV_PLACEMENT_SEED = 1                                        # random build: which customers get PV
@@ -73,11 +73,11 @@ PV_SITES = [                                                 # sites build: load
 PENETRATION_RUN = "sweep"
 SINGLE_PENETRATION_PCT = 100                                 # "single": compare the PV modes at this %
 SWEEP_PENETRATIONS_PCT = (40, 60, 80, 100)            # "sweep": every % -> hosting capacity per mode
-N_RUNS_PER_PENETRATION = 10                                  # randomized runs per penetration (1 to 1000)
+N_RUNS_PER_PENETRATION = 50                                  # randomized runs per penetration (1 to 1000)
 DAYS_PER_RUN = "all_sampled"                                 # "all_sampled" (section 6) or "worst_only" (rank 0)
 REDRAW_PV_PLACEMENT = True                                   # draw again for every run? (False = same for all runs)
-REDRAW_PV_RATING = False
-REDRAW_LOAD_DAY = False                                      # only used when the load day is not matched (section 7)
+REDRAW_PV_RATING = True
+REDRAW_LOAD_DAY = True                                      # only used when the load day is not matched (section 7)
 REDRAW_LOAD_PROFILE = True
 REDRAW_POWER_FACTOR = True
 INTRA_PENETRATION_SEED = 1                                   # seeds of the redrawn items for runs 1, 2, ... (run 0 = own seeds)
@@ -99,7 +99,7 @@ VOLT_VAR_CURVE = sc.InverterControl(
     source="IEEE 1547-2018 Table 8, Category B default")
 
 # ---- 6. PV days ---------------------------------------------------------------------------
-RANK_INTERVAL = 45                                           # simulate ranks 0, 25, 50 ... (0 = highest peak)
+RANK_INTERVAL = 30                                           # simulate ranks 0, 25, 50 ... (0 = highest peak)
 INCLUDE_BEST_DAY = True                                      # also simulate the last rank (lowest peak)
 
 # ---- 7. Load day: matched to the PV day, or a random day -----------------------------------

@@ -135,6 +135,9 @@ def apply_scenario(engine, scenario):
     control = inverter_control_commands(scenario.inverter_control, pv_elements)
     commands = demand_commands(scenario.demand, step) + der_commands(scenario.der, inventory, step) + control
     eng.run_commands(engine, edit_if_exists(commands, existing_der(engine)))
+    existing = {e.lower() for e in der_elements} | {f"load.{c.lower()}" for c in inventory} | {"line." + n.lower() for n in net.element_names(engine.ActiveCircuit.Lines)}
+    eng.run_commands(engine, [f"edit {element} bus1={bus}" for element, bus in (getattr(scenario, "connections", None) or {}).items()
+                              if element.lower() in existing])
     return der_elements, [f"InvControl.{INVERTER_CONTROL_NAME}"] if control else []
 
 

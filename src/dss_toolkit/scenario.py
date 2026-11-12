@@ -11,6 +11,7 @@ Every random choice has its own seed, so each source of randomness can be change
     power_factor_seed   the power factor of each customer at each step (gives kvar from kW)
     load_day_seed       which day of the load data is used (when it is not matched to the PV day)
     pv_rating_seed      which rating each random PV system gets (from a list of ratings)
+    phase_connection_seed   which phase each single-phase customer is connected to (optional)
 
 A StudyPlan can repeat each penetration over many randomized runs, redrawing any of these items per
 run from one intra_penetration_seed.
@@ -108,12 +109,16 @@ PV_MODE_CONTROL = {"no_pv": None, "pv": None, "pv_volt_watt": "volt_watt", "pv_v
 class Scenario:
     """window: TimeWindow; demand: {customer: (P [kW], Q [kvar]) arrays over the window};
     der: list of DER; tags: labels copied into every result row (penetration, seeds, day ...);
-    inverter_control: InverterControl used by every PV inverter, or None."""
+    inverter_control: InverterControl used by every PV inverter, or None;
+    connections: {element: bus text} changes of phase connection (see assign_phase_connections);
+    customer_phases: {customer: "A"/"B"/"C"} after those changes (used for per-phase results)."""
     window: TimeWindow
     demand: dict
     der: list
     tags: dict = field(default_factory=dict)
     inverter_control: InverterControl = None
+    connections: dict = None
+    customer_phases: dict = None
 
     @property
     def customers(self):
@@ -243,7 +248,32 @@ def penetration_scenarios(customers, load_profiles_kw, pv_profiles_pu, window, p
 
 # --- Tutorial 3: a study plan made of user selections ----------------------------------------------------
 MAX_RUNS_PER_PENETRATION = 1000          # hard limit on randomized runs per penetration (compute protection)
-REDRAWABLE = ("pv_placement", "pv_rating", "load_day", "load_profile", "power_factor")   # items a run may redraw
+REDRAWABLE = ("pv_placement", "pv_rating", "load_day", "load_profile", "power_factor", "phase_connection")   # items a run may redraw
+
+
+def assign_phase_connections(tap_points, customer_phases, phase_connection_seed):
+    """Random phase for every single-phase customer, from 'phase_connection_seed' only.
+    tap_points = topology.NetworkInfo.tap_points; customers sharing a tap element (e.g. one service
+    line feeding two houses) move together. Returns ({element: new bus text}, {customer: phase}).
+    A tap at the load itself also moves its PV system ('pvsystem.pv_<customer>')."""
+    groups = {}
+    for customer, tap in tap_points.items():
+        groups.setdefault(tap.element, []).append(customer)
+    rng = np.random.default_rng(phase_connection_seed)
+    elements = sorted(groups)
+    connections, phases = {}, dict(customer_phases)
+    for element in elements:
+        tap = tap_points[groups[element][0]]
+        node = int(rng.choice(tap.allowed_nodes))          # only phases that are energized there
+        bus_text = tap.bus_text
+        bus, *nodes = bus_text.split(".")
+        new_text = ".".join([bus] + [str(node) if n != "0" else n for n in nodes]) if nodes else f"{bus}.{node}"
+        connections[element] = new_text
+        for customer in groups[element]:
+            phases[customer] = "ABC"[int(node) - 1]
+            if element.startswith("load."):
+                connections[f"pvsystem.pv_{customer}"] = new_text
+    return connections, phases
 
 
 def assign_pv_ratings(customers, ratings_kva, weights, pv_rating_seed):
@@ -294,6 +324,9 @@ class StudyPlan:
     load_profile_seed: int = 1
     power_factor_seed: int = 1
     power_factor_range: tuple = (0.9, 0.98)
+    randomize_phase_connection: bool = False
+    phase_connection_seed: int = 1
+    redraw_phase_connection: bool = True
 
     def __post_init__(self):
         if self.pv_build not in ("random", "sites"):
@@ -341,6 +374,8 @@ class StudyPlan:
             return False
         if item == "load_day" and self.use_matched_load_day:
             return False
+        if item == "phase_connection" and not self.randomize_phase_connection:
+            return False
         return bool(getattr(self, f"redraw_{item}"))
 
     def notes(self):
@@ -359,7 +394,8 @@ class StudyPlan:
         seed; a redrawn item's seed for runs 1, 2 ... comes from intra_penetration_seed, the run
         number and the item only, so redrawing one item never changes another."""
         own = {"pv_placement": self.pv_placement_seed, "pv_rating": self.pv_rating_seed, "load_day": self.load_day_seed,
-               "load_profile": self.load_profile_seed, "power_factor": self.power_factor_seed}
+               "load_profile": self.load_profile_seed, "power_factor": self.power_factor_seed,
+               "phase_connection": self.phase_connection_seed}
         seeds = {}
         for code, item in enumerate(REDRAWABLE):
             if run_index > 0 and self.redraws(item):
@@ -392,14 +428,20 @@ def plan_days(plan, pv_profiles_pu):
 
 
 def iter_plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases=None,
-                        steps_per_day=48, step_minutes=30):
+                        steps_per_day=48, step_minutes=30, tap_points=None):
     """Every scenario of a StudyPlan, one at a time (a large study never holds them all in memory):
     for each run, each simulated PV day (worst to best), each PV mode and each penetration.
     "no_pv" runs once per run and day. With 'customer_phases' ({customer: "A"/"B"/"C"}, from
-    network.customer_phases) the tags also give the installed PV per phase."""
+    network.customer_phases) the tags also give the installed PV per phase. A plan with
+    randomize_phase_connection needs 'tap_points' (topology.NetworkInfo.tap_points)."""
+    if plan.randomize_phase_connection and not tap_points:
+        raise ValueError("randomize_phase_connection needs tap_points (topology.read_network(engine).tap_points)")
     sampled_days = plan_days(plan, pv_profiles_pu)
     for run_index in range(plan.n_runs_per_penetration):
         seeds = plan.run_seeds(run_index)
+        connections, run_phases = None, customer_phases
+        if plan.randomize_phase_connection:
+            connections, run_phases = assign_phase_connections(tap_points, customer_phases or {}, seeds["phase_connection"])
         load_days = choose_load_days([day for _, day in sampled_days], plan.use_matched_load_day,
                                      load_profiles_kw.shape[1], seeds["load_day"])
         profile_index = assign_load_profiles(customers, load_profiles_kw.shape[0], seeds["load_profile"])
@@ -417,25 +459,27 @@ def iter_plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, custo
                             "pv_total_kva": sum(d.kva for d in fleet), "pv_rank": rank, "pv_day": pv_day,
                             "pv_peak_pu": float(pv_profile.max()), "load_day_selection": plan.load_day_selection,
                             "load_day": load_day, "window": pv_window.label}
-                    if customer_phases is not None:
-                        kva = {ph: sum(d.kva for d in fleet if customer_phases.get(d.customer) == ph) for ph in "ABC"}
+                    if run_phases is not None:
+                        kva = {ph: sum(d.kva for d in fleet if run_phases.get(d.customer) == ph) for ph in "ABC"}
                         tags.update({f"pv_kva_phase_{ph.lower()}": kva[ph] for ph in "ABC"})
                         tags["pv_kva_phase_spread"] = max(kva.values()) - min(kva.values())
                     tags.update({
                         "pv_placement_seed": seeds["pv_placement"] if plan.pv_build == "random" else None,
                         "pv_rating_seed": seeds["pv_rating"] if plan.pv_build == "random" else None,
                         "load_profile_seed": seeds["load_profile"], "power_factor_seed": seeds["power_factor"],
-                        "load_day_seed": None if plan.use_matched_load_day else seeds["load_day"]})
-                    scenario = Scenario(pv_window, demand, fleet, tags)
+                        "load_day_seed": None if plan.use_matched_load_day else seeds["load_day"],
+                        "phase_connection_seed": seeds["phase_connection"] if plan.randomize_phase_connection else None})
+                    scenario = Scenario(pv_window, demand, fleet, tags, connections=connections,
+                                        customer_phases=run_phases if plan.randomize_phase_connection else None)
                     yield scenario.with_pv_mode(pv_mode, plan.inverter_controls)
 
 
 def plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases=None, steps_per_day=48,
-                   step_minutes=30):
+                   step_minutes=30, tap_points=None):
     """All scenarios of a plan as a list (for small plans; see iter_plan_scenarios).
     Returns (scenarios, [(rank, pv_day)])."""
     scenarios = list(iter_plan_scenarios(plan, customers, load_profiles_kw, pv_profiles_pu, customer_phases,
-                                         steps_per_day, step_minutes))
+                                         steps_per_day, step_minutes, tap_points))
     return scenarios, plan_days(plan, pv_profiles_pu)
 
 

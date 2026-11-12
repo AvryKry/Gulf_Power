@@ -1,0 +1,36 @@
+I don't like the seasonality choice method of Team Nando, continue choosing the PV curves from selected days by ranking the PV days and then choosing a rank interval along which to choose them. If I choose a rank interval of 100, it should evaluate the strongest PV day (rank 0, greatest peak), rank 100, rank 200, rank 300, and day 364 (if selected INCLUDE_BEST_DAY)
+
+I like the independence of randomization present in my Tut 3, every thing that can be randomized should have the capability to be randomized independently from every other randomization, and I like that loads can either be linked or independent of the PV day.
+
+I like the constructive progression of PV arrangements described in Tut 4, can you explain how this could apply to the tool, and how it differs from what I made in Tut 3?
+
+Add generalized checks for transformers, substation and lines, such that, alongside voltage compliance, checks can be run generally on any given network depending on the compiled circuit, remove any data-dependencies of the compliance checking functionality. The tool should operate the same whether I input a simple 3 bus network or the entire Ausnet data set. Non-applicable checks can be ignored where there are no components in the circuit to check, but should activate when the relevant components are read in
+
+I really like what the box plots can show, please add this as a high level setting to be declared at the beginning of the script - you can choose your results portrayal from this list (and you can select all that are desired). Ensure all results are properly organized into the results folder in a similar fashion to how we set up the Tut 3 results, add more or different organization modes as appropriate.
+- box plots (as in Tut 4), won't need a figure for each different # of runs, since one tool run will only have a single # runs declared (N_Runs_Per_Penetration). The metrics assessed in that document are constructive, and the plot formats are nice, you can change them to match the existing style guidelines of the toolkit as we have built it so far
+- High level output figures from Tut 3 (currently labeled fig 1, 2, 8, 8, 9, 10)
+- Penetration level output figures from Tut 3 (currently labeled 3, 4, 5, 5, 6, 6, 7, 7) ALSO PLEASE FIX THESE FIGURE NAMINGS - THERE SHOULD NOT BE FIGURES LABELED THE SAME NUMBER BUT BEING DIFFERENT FIGURES. Also consider during figure naming the combinations of these 3 different output settings so that there is no overlap in figure numbering or labeling
+
+Add another randomization feature with its own seed which can, if selected, randomize the phase connection
+
+Continue to use my Tut 3 methodology for counting % non-compliant and curtailment, since they seem more accurate and robust than the Team Nando methodology
+
+PV sizes are adjustable in settings, no reason to change from the TUT 3 settings system for now
+
+Keep the standard IEEE1547 control curve for now, since it is easy to reference. This is also adjustable in settings and will be refined as we continue to specify the model to our case
+
+You can match the Ausnet PV sizing settings from the tutorial using the established systems setting, just change the number settings, nothing about the settings structure
+
+Adding many-asset monitoring seems important, add it now, and if it destroys our runtime we can adjust it back down to be more reasonable
+
+No need for season-pool day sampling, I like the ranked day method better
+
+The method of creating one control and leaving it in place, and then toggling on and off the PV to save rebuild time seems important and a good path to take, as long as we retain the ability to test among our 4 different inverter control modes
+
+You should only need a single Tut 4 script, generalize, no A and B. As a simple case, I will use the 31 bus network to test, and can change the functionality simply by switching the simplified case for the complete Ausnet dataset
+
+To remedy runtime, I can increase the rank interval and reduce the runs per penetration, no need for an extra "worst_only" setting that will only add clutter
+
+Make the toolkit changes necessary to accommodate commercial load shapes. Ensure it is accessible in settings to view which loads are set to remain under a constant loadshape during model runs, and where those constant load shapes are being pulled from. It is unreasonable to assume that file names will be the same across different networks, so the functionality should be general enough to execute itself regardless of the filename (perhaps by going through the Master.dss), or it should add a setting so that the user can declare filenames and applications as appropriate. If the script can do it itself, thats ideal, dont make it a setting unless there is no other path, but explain how the script handles it, for this application, and generically
+
+I want to fix up the network modeling. Is it possible to make the produced image dynamic? So that when zoomed out, we can see the overall skeletal view of the network, and up zooming into a specific LV section, the icons scale such that it remains visually comprehensible, and we can even note the locations of specific loads on the LV network if we zoom in enough? I'd like some thoughts on this network modelling idea before we execute anything. What are our options here?

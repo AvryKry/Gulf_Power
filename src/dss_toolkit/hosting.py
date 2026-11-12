@@ -43,7 +43,7 @@ class StudySetup:
     limits: tuple                    # (lowest, highest) allowed customer voltage [pu]
     transformer: str = None          # transformer to monitor (None = the first one)
     transformer_rating_kva: float = None   # rating used for the utilisation (None = nameplate)
-    bus_coordinates: object = None   # coordinates file path or {bus: (x, y)} for maps (None = none)
+    bus_coordinates: object = None   # coordinates file, {bus: (x, y)}, or a list of them (None = none)
     customer_phases: dict = None     # {load: "A"/"B"/"C"} (network.customer_phases) for per-phase results
 
 
@@ -176,6 +176,27 @@ def phase_voltage_maxima(sim, customer_phases):
     return maxima
 
 
+ASSET_KINDS = {"head_transformer": "head_transformer", "transformer": "transformer", "mv_line": "mv_line", "lv_line": "lv_line"}
+
+
+def asset_summary(sim):
+    """All-asset columns of a simulation that monitored assets (BaseCircuit): highest loading of the
+    head (substation) transformer, of any other transformer, of any MV and of any LV line [% of
+    rating], and how many transformers / lines went over 100 %. NaN where a network has none."""
+    if "asset_pct_max" not in sim:
+        return {}
+    pct, kinds = np.asarray(sim["asset_pct_max"]), np.array([a.kind for a in sim["assets"]])
+    out = {}
+    for kind in ASSET_KINDS:
+        values = pct[kinds == kind]
+        out[f"max_{kind}_utilisation_pct"] = float(values.max()) if len(values) else np.nan
+    transformer = np.isin(kinds, ["head_transformer", "transformer"])
+    line = np.isin(kinds, ["mv_line", "lv_line"])
+    out["n_overloaded_transformers"] = int((pct[transformer] > 100).sum())
+    out["n_overloaded_lines"] = int((pct[line] > 100).sum())
+    return out
+
+
 def summarise(sim, limits, customer_phases=None):
     """One results row: the scenario's tags + the key numbers of the simulation (see the module
     docstring for the columns). With 'customer_phases' the row also gives the highest voltage on
@@ -184,7 +205,9 @@ def summarise(sim, limits, customer_phases=None):
     s_total, s_phase = transformer_apparent_power(sim["tx_P"], sim["tx_Q"])
     available, delivered, curtailed, curtailed_pct, reactive = pv_energy(sim)
     tags = {k: v for k, v in sim["scenario"].tags.items() if not isinstance(v, (dict, list))}
+    customer_phases = getattr(sim["scenario"], "customer_phases", None) or customer_phases
     phases = phase_voltage_maxima(sim, customer_phases) if customer_phases else {}
+    assets = asset_summary(sim)
     utilisation = 100 * s_total.max() / sim["transformer_kva"]
     return {**tags, "n_noncompliant_customers": len(set(bad["under"]) | set(bad["over"])),
             "n_overvoltage_customers": len(bad["over"]), "n_undervoltage_customers": len(bad["under"]),
@@ -192,14 +215,15 @@ def summarise(sim, limits, customer_phases=None):
             "transformer_peak_kva": s_total.max(), "transformer_utilisation_pct": utilisation,
             "transformer_overloaded": bool(utilisation > 100),
             "transformer_phase_utilisation_pct": 100 * s_phase.max() / (sim["transformer_kva"] / s_phase.shape[1]),
-            "transformer_min_p_kw": sim["tx_P"].sum(axis=1).min(),
+            "transformer_min_p_kw": sim["tx_P"].sum(axis=1).min(), **assets,
             "pv_available_kwh": available, "pv_delivered_kwh": delivered, "pv_curtailed_kwh": curtailed,
             "pv_curtailed_pct": curtailed_pct, "pv_reactive_kvarh": reactive, "converged": sim["converged"]}
 
 
 # --- Many scenarios ----------------------------------------------------------------------------------
 def run_study(engine, setup, scenarios, results_file=None, simulations_folder=None, keep_simulations=False,
-              reuse_circuit=False, verbose=False, on_simulation=None, n_scenarios=None, progress_every=None):
+              reuse_circuit=False, verbose=False, on_simulation=None, n_scenarios=None, progress_every=None,
+              base_circuit=None):
     """Simulate every scenario (a list or any iterable, e.g. scenario.iter_plan_scenarios). Returns
     (DataFrame with one row per scenario, list of simulations or None).
     results_file: CSV to append each row to as it is done, or a function row -> CSV path (e.g. one
@@ -207,13 +231,15 @@ def run_study(engine, setup, scenarios, results_file=None, simulations_folder=No
     simulation as run_<n>.npz. keep_simulations=False keeps only the table in memory.
     on_simulation(sim, row): called after every simulation (e.g. to average time series without
     keeping them). verbose: one line per run; progress_every=n: a progress line with the time left
-    every n runs (n_scenarios = total, for an iterable without a length)."""
+    every n runs (n_scenarios = total, for an iterable without a length). base_circuit: a
+    basecircuit.BaseCircuit to run the scenarios on (built once, switched per scenario, all
+    assets monitored) instead of rebuilding the circuit for every scenario."""
     rows = []
     sims = [] if keep_simulations else None
     total = n_scenarios if n_scenarios is not None else (len(scenarios) if hasattr(scenarios, "__len__") else None)
     started = time.perf_counter()
     for i, scenario in enumerate(scenarios):
-        sim = simulate(engine, setup, scenario, reuse_circuit)
+        sim = base_circuit.simulate(scenario) if base_circuit else simulate(engine, setup, scenario, reuse_circuit)
         row = {"run": i, **summarise(sim, setup.limits, setup.customer_phases)}
         rows.append(row)
         if results_file:
@@ -242,17 +268,21 @@ def format_duration(seconds):
     return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.1f} min" if seconds < 5400 else f"{seconds / 3600:.1f} h"
 
 
-def estimate_runtime(engine, setup, scenarios, n_total, n_sample=8):
-    """Seconds the whole study should take, from timing the first 'n_sample' scenarios of an iterable
-    (they are simulated and thrown away). Use it to print the expected run time before a long study."""
-    sample = []
+def estimate_runtime(engine, setup, scenarios, n_total, n_sample=8, base_circuit=None, pool=None):
+    """Seconds the whole study should take, from timing 'n_sample' scenarios of an iterable (they are
+    simulated and thrown away). Use it to print the expected run time before a long study.
+    pool: take the sample evenly from the first 'pool' scenarios (e.g. every PV mode and penetration
+    of the first day) instead of the first n_sample. base_circuit: time BaseCircuit.simulate()."""
+    candidates = []
     for scenario in scenarios:
-        sample.append(scenario)
-        if len(sample) == n_sample:
+        candidates.append(scenario)
+        if len(candidates) == (pool or n_sample):
             break
+    picks = np.unique(np.linspace(0, len(candidates) - 1, min(n_sample, len(candidates))).round().astype(int))
+    sample = [candidates[i] for i in picks] if candidates else []
     started = time.perf_counter()
     for scenario in sample:
-        simulate(engine, setup, scenario)
+        base_circuit.simulate(scenario) if base_circuit else simulate(engine, setup, scenario)
     return (time.perf_counter() - started) / max(len(sample), 1) * n_total
 
 
@@ -326,13 +356,24 @@ def violation_limit(threshold, unit, n_customers):
     raise ValueError(f"unit must be 'customers' or 'pct_of_customers', not {unit!r}")
 
 
-def score_day_cases(table, max_violations, transformer_overload_weight=5):
-    """Add to a results table: voltage_violations (= non-compliant customers), overload_violations
-    (= transformer_overload_weight if the transformer went over its rating, else 0),
-    violation_score (their sum) and passes (violation_score <= max_violations)."""
+def score_day_cases(table, max_violations, transformer_overload_weight=5, line_overload_weight=5):
+    """Add to a results table: voltage_violations (= non-compliant customers),
+    transformer_violations (= transformer_overload_weight x overloaded transformers, the head
+    transformer included), line_violations (= line_overload_weight x overloaded lines),
+    overload_violations (their sum), violation_score (all violations) and passes
+    (violation_score <= max_violations). Tables without all-asset columns (one monitored
+    transformer, as in Tutorial 3) count that transformer only."""
     table = table.copy()
     table["voltage_violations"] = table["n_noncompliant_customers"]
-    table["overload_violations"] = np.where(table["transformer_overloaded"], transformer_overload_weight, 0)
+    if "n_overloaded_transformers" in table:
+        overloaded_transformers = table["n_overloaded_transformers"].fillna(0)
+        overloaded_lines = table["n_overloaded_lines"].fillna(0)
+    else:
+        overloaded_transformers = table["transformer_overloaded"].astype(int)
+        overloaded_lines = 0
+    table["transformer_violations"] = transformer_overload_weight * overloaded_transformers
+    table["line_violations"] = line_overload_weight * overloaded_lines
+    table["overload_violations"] = table["transformer_violations"] + table["line_violations"]
     table["violation_score"] = table["voltage_violations"] + table["overload_violations"]
     table["passes"] = table["violation_score"] <= max_violations
     return table
@@ -347,12 +388,16 @@ def pass_share_table(scored, group_by=("pv_mode", "penetration_pct")):
                         n_day_cases=("passes", "size"), n_passed=("passes", "sum"),
                         n_voltage_violation_cases=("voltage_violations", lambda v: int((v > 0).sum())),
                         n_overload_cases=("overload_violations", lambda v: int((v > 0).sum())),
+                        n_transformer_overload_cases=("transformer_violations", lambda v: int((v > 0).sum())),
+                        n_line_overload_cases=("line_violations", lambda v: int((v > 0).sum())),
                         mean_violation_score=("violation_score", "mean"),
                         max_violation_score=("violation_score", "max")).reset_index()
     table["n_passed"] = table["n_passed"].astype(int)
     table["pass_share_pct"] = 100 * table["n_passed"] / table["n_day_cases"]
     table["voltage_violation_case_pct"] = 100 * table["n_voltage_violation_cases"] / table["n_day_cases"]
     table["overload_case_pct"] = 100 * table["n_overload_cases"] / table["n_day_cases"]
+    table["transformer_overload_case_pct"] = 100 * table["n_transformer_overload_cases"] / table["n_day_cases"]
+    table["line_overload_case_pct"] = 100 * table["n_line_overload_cases"] / table["n_day_cases"]
     return table
 
 
@@ -413,6 +458,28 @@ def best_placement_runs(scored, group_by=("penetration_pct",)):
     columns, ascending = zip(*PLACEMENT_RANKING)
     ranked = runs.sort_values(list(columns), ascending=list(ascending), kind="stable")
     return ranked.groupby(list(group_by), sort=False, dropna=False).head(1).reset_index(drop=True)
+
+
+def verify_base_circuit(engine, setup, info, scenarios, inverter_controls=None, atol_pu=1e-3, atol_kw=0.1, atol_kvar=1.0):
+    """Run scenarios with a full rebuild and on a BaseCircuit and compare customer voltages [pu],
+    transformer flows and PV output [kW / kvar]. Inverter controls converge to a tolerance, so
+    small differences (~1e-4 pu, a few tenths of a kvar with volt-var) are expected. Returns {array: largest difference} and prints
+    PASS/FAIL. Run it on a new network before relying on BaseCircuit for a study."""
+    from . import basecircuit
+    rebuilt = [simulate(engine, setup, s) for s in scenarios]
+    candidates = sorted({d.customer for s in scenarios for d in s.der})
+    base = basecircuit.BaseCircuit(engine, setup, info, candidates, inverter_controls,
+                                   scenarios[0].window.n_steps, scenarios[0].window.step_minutes)
+    on_base = [base.simulate(s) for s in scenarios]
+    diff = {}
+    for key in ("V", "tx_P", "tx_Q", "der_P", "der_Q"):
+        diff[key] = max(float(np.abs(a[key] - b[key]).max()) if a[key].size else 0.0 for a, b in zip(rebuilt, on_base))
+    p_diff, q_diff = max(diff["tx_P"], diff["der_P"]), max(diff["tx_Q"], diff["der_Q"])
+    ok = diff["V"] <= atol_pu and p_diff <= atol_kw and q_diff <= atol_kvar
+    print(f"BaseCircuit check on {len(scenarios)} scenarios: largest differences V {diff['V']:.1e} pu, "
+          f"P {p_diff:.1e} kW, Q {q_diff:.1e} kvar -> {'PASS' if ok else 'FAIL'} "
+          f"(tolerances {atol_pu:g} pu, {atol_kw:g} kW, {atol_kvar:g} kvar)")
+    return diff
 
 
 def verify_reuse(engine, setup, scenarios, atol=1e-6):

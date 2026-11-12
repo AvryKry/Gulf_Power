@@ -1,0 +1,34 @@
+{
+    // Run configurations for VS Code's "Run and Debug" panel (Ctrl+Shift+D, then F5).
+    // They start Python through the debugger, which passes paths with spaces correctly.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Tut 4a: network map",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/Tut 4/tut_4a_network_plot.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Tut 4: Monte Carlo hosting capacity",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/Tut 4/tut_4_monte_carlo_hosting_capacity.py",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Current file",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}
