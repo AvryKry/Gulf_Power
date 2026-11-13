@@ -59,50 +59,118 @@ def print_load_inventory(inventory):
           f"{sum(i['kvar'] for i in inventory.values()):.0f} kvar")
 
 
-def limit_flag(v, limits):
-    return "<" if v < limits[0] else (">" if v > limits[1] else "")
+def limit_flag(v, limits, dead_pu=extract.DEAD_NODE_PU):
+    """'<' below the lower limit, '>' above the upper limit, 'not energized' below dead_pu."""
+    return "not energized" if v < dead_pu else ("<" if v < limits[0] else (">" if v > limits[1] else ""))
+
+
+# Snapshot tables: built once as raw values (numbers stay numbers, for CSV files), then either
+# printed (print_* below, with the formats in SNAPSHOT_FORMATS) or saved (results.save_tables).
+def loads_table(results, limits):
+    rows = [[n, bus, p, q, v, limit_flag(v, limits)] for n, (bus, p, q, v) in results["loads"].items()]
+    return ["Load", "Bus", "P (kW)", "Q (kvar)", "V min (pu)", "Outside limits"], rows
+
+
+def bus_voltages_table(bus_results):
+    """bus_results: {bus: (phases, VUF)} as returned by extract.three_phase_bus_results()."""
+    rows = [[bus, ph, pu, v, ang, vuf] for bus, (phases, vuf) in bus_results.items() for ph, pu, v, ang in phases]
+    return ["Bus", "Phase", "V (pu)", "V (V)", "Angle (deg)", "VUF (%)"], rows
+
+
+def transformers_table(results):
+    rows = [[name, ph + 1, p[ph], q[ph], tap, kva] for name, (p, q, tap, kva) in results["xfmr"].items() for ph in range(len(p))]
+    return ["Transformer", "Phase", "P (kW)", "Q (kvar)", "Winding 2 tap", "Rating (kVA)"], rows
+
+
+def lines_table(results):
+    rows = [[n, a, i, pct] for n, (i, a, pct) in results["lines"].items()]
+    return ["Line", "Ampacity (A)", "Current (A)", "Loading (%)"], rows
+
+
+def assets_table(results):
+    """Every monitored transformer and rated line (needs extract.collect_results(..., info=...))."""
+    rows = sorted(([e, kind, rating, unit, pct] for e, (kind, rating, unit, pct) in results.get("assets", {}).items()),
+                  key=lambda r: -r[4])
+    return ["Element", "Kind", "Rating", "Rating unit", "Loading (%)"], rows
+
+
+def node_voltages_table(results, limits):
+    rows = [[n, v, limit_flag(v, limits)] for n, v in results["vnode"].items()]
+    return ["Node", "V (pu)", "Outside limits"], rows
+
+
+def summary_table(results, limits):
+    taps = ", ".join(f"{k} = {v}" for k, v in results["reg_taps"].items()) or "no regulators"
+    rows = [["Substation P (kW)", results["P_source"]], ["Substation Q (kvar)", results["Q_source"]],
+            ["PV P (kW)", results["P_pv"]], ["Load P (kW)", results["P_load"]], ["Load Q (kvar)", results["Q_load"]],
+            ["Total losses P (kW)", results["P_loss"]], ["Line losses P (kW)", results["P_line_loss"]],
+            ["Losses (% of substation P)", 100 * results["P_loss"] / results["P_source"] if results["P_source"] else None],
+            ["Min / max / mean V (pu)", f"{results['v_min']:.4f} / {results['v_max']:.4f} / {results['v_mean']:.4f}"],
+            [f"Nodes below {limits[0]} / above {limits[1]} pu", f"{results['n_under']} / {results['n_over']}"],
+            *([["Nodes not energized (left out above)", results["n_dead"]]] if results.get("n_dead") else []),
+            ["Regulator taps", taps], ["Power balance check (kW)", extract.power_balance(results)]]
+    if "converged" in results:
+        rows = [["Converged", "yes" if results["converged"] else "NO"], ["Iterations", results["iterations"]],
+                ["Control iterations", results["control_iterations"]]] + rows
+    return ["Result", "Value"], rows
+
+
+SNAPSHOT_FORMATS = {"loads": "s,s,.2f,.2f,.4f,s", "bus_voltages": "s,d,.4f,.1f,.2f,.2f",
+                    "transformers": "s,d,.2f,.2f,.5f,.0f", "lines": "s,.0f,.1f,.1f",
+                    "assets": "s,s,.0f,s,.1f", "node_voltages": "s,.4f,s", "summary": "s,.3f"}
+
+
+def snapshot_tables(results, limits):
+    """{name: (headers, rows)} of every snapshot result, raw values: summary, loads, bus_voltages
+    (three-phase buses), transformers, lines, node_voltages, and assets when collect_results() had
+    the network info. Save them with results.save_tables(); the print_* bricks print them."""
+    tables = {"summary": summary_table(results, limits), "loads": loads_table(results, limits),
+              "bus_voltages": bus_voltages_table(results["p3"]), "transformers": transformers_table(results),
+              "lines": lines_table(results), "node_voltages": node_voltages_table(results, limits)}
+    if "assets" in results:
+        tables["assets"] = assets_table(results)
+    return tables
+
+
+def _formatted(rows, name):
+    specs = SNAPSHOT_FORMATS[name].split(",")
+    return [[fmt(x, spec) for x, spec in zip(r, specs)] for r in rows]
 
 
 def print_loads(results, limits):
-    rows = [[n, bus, fmt(p, ".2f"), fmt(q, ".2f"), fmt(v, ".4f"), limit_flag(v, limits)]
-            for n, (bus, p, q, v) in results["loads"].items()]
-    print_table(["Load", "Bus", "P (kW)", "Q (kvar)", "V min (pu)", ""], rows,
+    headers, rows = loads_table(results, limits)
+    print_table(headers[:-1] + [""], _formatted(rows, "loads"),
                 f"Loads: power and lowest voltage ('<' below {limits[0]} pu, '>' above {limits[1]} pu):", "<<>>><")
 
 
 def print_bus_voltages(bus_results):
-    """bus_results: {bus: (phases, VUF)} as returned by extract.three_phase_bus_results()."""
-    rows = []
-    for bus, (phases, vuf) in bus_results.items():
-        for i, (ph, pu, v, ang) in enumerate(phases):
-            rows.append([bus if i == 0 else "", ph, fmt(pu, ".4f"), fmt(v, ".1f"), fmt(ang, ".2f"),
-                         fmt(vuf, ".2f") if i == 0 else ""])
-    print_table(["Bus", "Phase", "V (pu)", "V (V)", "Angle (deg)", "VUF (%)"], rows, "Bus voltages:")
+    headers, rows = bus_voltages_table(bus_results)
+    text = _formatted(rows, "bus_voltages")
+    for k in range(1, len(text)):                    # bus name and VUF only on a bus's first phase
+        if rows[k][0] == rows[k - 1][0]:
+            text[k][0], text[k][5] = "", ""
+    print_table(headers, text, "Bus voltages:")
 
 
 def print_transformers(results):
+    headers, rows = transformers_table(results)
     for name, (p, q, tap, kva) in results["xfmr"].items():
-        rows = [[ph + 1, fmt(p[ph], ".2f"), fmt(q[ph], ".2f")] for ph in range(len(p))]
-        rows.append(["Total", fmt(p.sum(), ".2f"), fmt(q.sum(), ".2f")])
-        print_table(["Phase", "P (kW)", "Q (kvar)"], rows,
+        mine = [r for r in rows if r[0] == name]
+        text = [[r[1], fmt(r[2], ".2f"), fmt(r[3], ".2f")] for r in mine]
+        text.append(["Total", fmt(p.sum(), ".2f"), fmt(q.sum(), ".2f")])
+        print_table(["Phase", "P (kW)", "Q (kvar)"], text,
                     f"Transformer {name} ({kva:.0f} kVA), winding 2 tap = {tap:.5f} (+ = forward flow):")
 
 
 def print_feeder_summary(results, limits):
-    taps = ", ".join(f"{k} = {v}" for k, v in results["reg_taps"].items()) or "no regulators"
-    rows = [["Substation P (kW)", fmt(results["P_source"], ".2f")], ["Substation Q (kvar)", fmt(results["Q_source"], ".2f")],
-            ["PV P (kW)", fmt(results["P_pv"], ".2f")], ["Load P (kW)", fmt(results["P_load"], ".2f")],
-            ["Total losses P (kW)", fmt(results["P_loss"], ".3f")], ["Line losses P (kW)", fmt(results["P_line_loss"], ".3f")],
-            ["Losses (% of substation P)", fmt(100 * results["P_loss"] / results["P_source"], ".2f") if results["P_source"] else "-"],
-            ["Min / max / mean V (pu)", f"{results['v_min']:.4f} / {results['v_max']:.4f} / {results['v_mean']:.4f}"],
-            [f"Nodes below {limits[0]} / above {limits[1]} pu", f"{results['n_under']} / {results['n_over']}"],
-            ["Regulator taps", taps], ["Power balance check (kW)", fmt(extract.power_balance(results), ".3f")]]
-    print_table(["Result", "Value"], rows, "Feeder summary:")
+    headers, rows = summary_table(results, limits)
+    print_table(headers, [[label, fmt(v, ".3f" if label.startswith(("Total losses", "Line losses", "Power balance")) else ".2f")]
+                          for label, v in rows], "Feeder summary:")
 
 
 def print_line_loading(results):
-    rows = [[n, fmt(a, ".0f"), fmt(i, ".1f"), fmt(pct, ".1f")] for n, (i, a, pct) in results["lines"].items()]
-    print_table(["Line", "Ampacity (A)", "Current (A)", "Loading (%)"], rows, "Line loading (highest conductor):")
+    headers, rows = lines_table(results)
+    print_table(headers, _formatted(rows, "lines"), "Line loading (highest conductor):")
 
 
 def print_snapshot_report(results, limits):
@@ -244,32 +312,46 @@ def check_line(status, label, detail=""):
     print(f"  [{status:4s}] {label}{(': ' + detail) if detail else ''}")
 
 
-def print_network_checks(info, coords_share, anonymise=None):
-    """Summary of a topology.NetworkInfo with PASS / WARN / FAIL lines, using only counts and
-    anonymised names, so it can be shared. coords_share = share of buses with coordinates (0-1)."""
+def network_checks(info, coords_share=None, anonymise=None):
+    """Checks of a topology.NetworkInfo as rows [status, check, detail] (PASS / WARN / FAIL), using
+    only counts and anonymised names, so they can be shared. coords_share = share of buses with
+    coordinates (0-1); None leaves that check out (e.g. a power flow that draws no map)."""
     anon = anonymise or Anonymiser(False)
     from collections import Counter
     kinds = Counter(a.kind for a in info.assets)
     phases = Counter(info.load_phases.values())
     levels = sorted({round(v, 3) for v in info.bus_kv_ll.values() if v > 0}, reverse=True)
     no_base = sum(1 for v in info.bus_kv_ll.values() if v == 0)
-    print(f"\nNetwork '{anon(info.circuit_name, 'circuit')}'")
-    check_line("PASS", "source bus", anon(info.source_bus, "bus"))
-    check_line("PASS" if info.buses else "FAIL", "buses", f"{len(info.buses)}")
-    check_line("PASS" if levels else "FAIL", "voltage levels (kV line-to-line)", ", ".join(f"{v:g}" for v in levels) or "none")
-    check_line("PASS" if no_base == 0 else "WARN", "buses without a voltage base", f"{no_base}"
-               + (" (set VOLTAGE_BASES_KV, or SetkVBase in the data)" if no_base else ""))
-    check_line("PASS" if info.base_case_solved else "WARN", "test power flow (no PV, loads as in the files)",
-               "converged" if info.base_case_solved else "did NOT converge - check sources, voltage bases, isolated parts")
-    check_line("PASS" if not info.islands else "WARN", "parts not connected to the source",
-               f"{len(info.islands)}" + (f" ({sum(len(i) for i in info.islands)} buses)" if info.islands else ""))
-    check_line("PASS" if kinds.get("head_transformer") else "WARN", "head (substation) transformers", f"{kinds.get('head_transformer', 0)}")
-    check_line("PASS", "other transformers", f"{kinds.get('transformer', 0)}")
-    check_line("PASS", "rated lines (MV / LV)", f"{kinds.get('mv_line', 0)} / {kinds.get('lv_line', 0)}")
     unrated = sum(1 for e, *_ in info.branches if e.startswith("line.")) - kinds.get("mv_line", 0) - kinds.get("lv_line", 0)
-    check_line("PASS" if unrated <= 0 else "WARN", "lines without a rating in the data (not checked)", f"{max(unrated, 0)}")
-    check_line("PASS" if info.loads else "FAIL", "loads", f"{len(info.loads)} (" + ", ".join(f"{k}: {v}" for k, v in sorted(phases.items())) + ")")
-    check_line("PASS", "loads with a fixed shape", f"{len(info.fixed_loads)}")
-    check_line("PASS", "single-phase customers whose phase can be randomized", f"{len(info.tap_points)}")
-    check_line("PASS" if coords_share >= 0.999 else ("WARN" if coords_share > 0 else "PASS"), "buses with coordinates in the data",
-               f"{100 * coords_share:.1f} %" + ("" if coords_share >= 0.999 else " (the rest are placed automatically)"))
+    rows = [
+        ["PASS", "circuit", anon(info.circuit_name, "circuit")],
+        ["PASS", "source bus", anon(info.source_bus, "bus")],
+        ["PASS" if info.buses else "FAIL", "buses", f"{len(info.buses)}"],
+        ["PASS" if levels else "FAIL", "voltage levels (kV line-to-line)", ", ".join(f"{v:g}" for v in levels) or "none"],
+        ["PASS" if no_base == 0 else "WARN", "buses without a voltage base",
+         f"{no_base}" + (" (set VOLTAGE_BASES_KV, or SetkVBase in the data)" if no_base else "")],
+        ["PASS" if info.base_case_solved else "WARN", "test power flow (no PV, loads as in the files)",
+         "converged" if info.base_case_solved else "did NOT settle - check sources, voltage bases, isolated parts, and "
+         "regulator / capacitor controls (phase checks assume every phase is live)"],
+        ["PASS" if not info.islands else "WARN", "parts not connected to the source",
+         f"{len(info.islands)}" + (f" ({sum(len(i) for i in info.islands)} buses)" if info.islands else "")],
+        ["PASS" if kinds.get("head_transformer") else "WARN", "head (substation) transformers", f"{kinds.get('head_transformer', 0)}"],
+        ["PASS", "other transformers", f"{kinds.get('transformer', 0)}"],
+        ["PASS", "rated lines (MV / LV)", f"{kinds.get('mv_line', 0)} / {kinds.get('lv_line', 0)}"],
+        ["PASS" if unrated <= 0 else "WARN", "lines without a rating in the data (not checked)", f"{max(unrated, 0)}"],
+        ["PASS" if info.loads else "FAIL", "loads",
+         f"{len(info.loads)} (" + ", ".join(f"{k}: {v}" for k, v in sorted(phases.items())) + ")"],
+        ["PASS", "loads with a fixed shape", f"{len(info.fixed_loads)}"],
+        ["PASS", "single-phase customers whose phase can be randomized", f"{len(info.tap_points)}"]]
+    if coords_share is not None:
+        rows.append(["PASS" if coords_share >= 0.999 or coords_share == 0 else "WARN", "buses with coordinates in the data",
+                     f"{100 * coords_share:.1f} %" + ("" if coords_share >= 0.999 else " (the rest are placed automatically)")])
+    return rows
+
+
+def print_network_checks(info, coords_share=None, anonymise=None):
+    """Print network_checks() as PASS / WARN / FAIL lines."""
+    rows = network_checks(info, coords_share, anonymise)
+    print(f"\nNetwork '{rows[0][2]}'")
+    for status, label, detail in rows[1:]:
+        check_line(status, label, detail)

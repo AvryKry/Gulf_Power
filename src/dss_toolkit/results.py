@@ -48,6 +48,20 @@ def load_simulation(path):
     return sim
 
 
+def save_tables(tables, folder):
+    """Save tables as CSV files in 'folder', one file per table: {name: (headers, rows)} (e.g.
+    reports.snapshot_tables()) or {name: DataFrame}. Returns {name: path}. Empty tables are saved
+    with their headers only, so a missing file always means the table was not made."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = {}
+    for name, table in tables.items():
+        frame = table if isinstance(table, pd.DataFrame) else pd.DataFrame(table[1], columns=table[0])
+        paths[name] = folder / f"{name}.csv"
+        frame.to_csv(paths[name], index=False)
+    return paths
+
+
 def save_settings(settings, path):
     """Save the settings of a study (any dict, e.g. dataclasses.asdict(plan)) as readable JSON,
     so a results folder always says how it was made."""

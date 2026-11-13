@@ -57,7 +57,7 @@ class BaseCircuit:
                          der_text.inverter_control_command(f"toolkit_{mode}", mode, curve, extra="enabled=no")]
         eng.run_commands(engine, commands)
         eng.set_daily_mode(engine, step_minutes)
-        engine.ActiveCircuit.Solution.Solve()          # initialise every element once before the first scenario
+        eng.solve(engine, verbose=False)               # initialise every element once before the first scenario
         self.taps = _transformer_taps(engine)
         self.pv_state = {c: None for c in self.pv_candidates}
         self.pv_index = {}
@@ -70,11 +70,8 @@ class BaseCircuit:
         self._pv_version, self._control_der = 0, None
         self.loads = net.element_names(engine.ActiveCircuit.Loads)
         self.fixed_load_list = [l for l in self.loads if l in info.fixed_loads]
-        pd_names = [n.lower() for n in engine.ActiveCircuit.PDElements.AllNames]
-        position = {n: i for i, n in enumerate(pd_names)}
-        self.assets = [a for a in info.assets if a.element in position]
-        self.asset_index = np.array([position[a.element] for a in self.assets], dtype=int)
-        self.asset_scale = np.array([a.pct_scale for a in self.assets])
+        self.asset_positions = extract.asset_positions(engine, info.assets)
+        self.assets = self.asset_positions[0]
         head = [a.element for a in self.assets if a.kind == "head_transformer"]
         self.transformer = setup.transformer or (head[0].split(".", 1)[1] if head else
                                                  net.element_names(engine.ActiveCircuit.Transformers)[0])
@@ -195,7 +192,7 @@ class BaseCircuit:
         _restore_taps(engine, self.taps)
         eng.run_commands(engine, ["Reset"])
         eng.set_daily_mode(engine, scenario.window.step_minutes)
-        circuit.Solution.Solve()                          # warm-up step: lets every element take up its new
+        eng.solve(engine, verbose=False)                  # warm-up step: lets every element take up its new
         eng.set_daily_mode(engine, scenario.window.step_minutes)   # shape values, then restart at hour 0
         n = scenario.window.n_steps
         pv_customers = [d.customer for d in scenario.der if d.kind == "pv"]
@@ -204,15 +201,14 @@ class BaseCircuit:
         tx_p, tx_q, der_p, der_q = [], [], np.zeros((n, len(pv_idx))), np.zeros((n, len(pv_idx)))
         fixed_pq = np.zeros((2, len(self.fixed_load_list), n))
         asset_max = np.zeros(len(self.assets))
-        pd, pvs = circuit.PDElements, circuit.PVSystems
+        pvs = circuit.PVSystems
         converged = True
         for step in range(n):
             converged &= eng.solve(engine, verbose=False)
             v = np.asarray(circuit.AllBusVmagPu)[self.node_flat]
             v_min[:, step] = np.minimum.reduceat(v, self.node_starts) if len(v) else v
             if len(self.assets):
-                pct = np.asarray(pd.AllPctNorm(False))[self.asset_index] * self.asset_scale
-                np.maximum(asset_max, pct, out=asset_max)
+                np.maximum(asset_max, extract.asset_loading(engine, self.asset_positions), out=asset_max)
             p, q, _, _ = _transformer_flow(engine, self.transformer)
             tx_p.append(p)
             tx_q.append(q)

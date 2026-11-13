@@ -31,13 +31,78 @@ def is_command_list(circuit_source):
     return isinstance(circuit_source, (list, tuple))
 
 
-def compile_circuit(engine, circuit_source):
+SOLVE_PROBLEM_WORDS = ("control iterations", "not converge", "did not converge", "solution", "maxiter")
+
+
+def is_solve_problem(error):
+    """True if an OpenDSS error comes from a power flow that did not settle (e.g. a 'Solve' line in a
+    master file hitting 'Max Control Iterations Exceeded'), rather than from a broken model."""
+    text = str(error).lower()
+    return "#485" in text or any(word in text for word in SOLVE_PROBLEM_WORDS)
+
+
+def _command_lines(path):
+    """Commands of a DSS file, one per line, without comments (! // and /* ... */ blocks)."""
+    in_block = False
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for number, line in enumerate(f, start=1):
+            text = line.strip()
+            if in_block:
+                if "*/" in text:
+                    in_block, text = False, text.split("*/", 1)[1].strip()
+                else:
+                    continue
+            if text.startswith("/*"):
+                if "*/" not in text:
+                    in_block = True
+                    continue
+                text = text.split("*/", 1)[1].strip()
+            if text and not text.startswith(("!", "//")):
+                yield number, text
+
+
+def compile_without_solve(engine, master_file):
+    """Compile a master file one line at a time, skipping its 'Solve' lines (and 'Show'/'Plot'
+    lines), so that a power flow that does not settle cannot stop the model from being built.
+    The study solves the circuit later with its own settings. Returns the skipped line numbers."""
+    import os
+    master_file = Path(master_file).resolve()
+    skipped, previous = [], os.getcwd()
+    run_commands(engine, ["Clear"])
+    os.chdir(master_file.parent)                     # relative Redirect / file= paths resolve here
+    try:
+        engine.DataPath = str(master_file.parent)
+        for number, text in _command_lines(master_file):
+            if text.split()[0].lower() in ("solve", "show", "plot", "export", "visualize"):
+                skipped.append(number)
+                continue
+            try:
+                engine.Text.Command = text
+            except Exception as error:
+                raise RuntimeError(f"{master_file.name}, line {number}: {error}") from None
+    finally:
+        os.chdir(previous)
+    return skipped
+
+
+def compile_circuit(engine, circuit_source, verbose=True):
     """Clear OpenDSS and create the circuit: compile a master file (which redirects to all the
-    other files), or run a list of commands. Return the circuit name."""
+    other files), or run a list of commands. If the master file's own 'Solve' line fails because
+    the power flow does not settle, the file is compiled again without its Solve lines (with a
+    note), because compiling only needs to build the model. Return the circuit name."""
     if is_command_list(circuit_source):
         run_commands(engine, ["Clear", *circuit_source])
-    else:
+        return engine.ActiveCircuit.Name
+    try:
         run_commands(engine, ["Clear", f'Compile "{circuit_source}"'])
+    except Exception as error:
+        if not is_solve_problem(error):
+            raise
+        skipped = compile_without_solve(engine, circuit_source)
+        if verbose:
+            print(f"NOTE: the master file solves the circuit itself and that power flow did not settle "
+                  f"({str(error).splitlines()[0]}). It was compiled again without its Solve line(s) "
+                  f"{skipped}; the study solves the circuit with its own settings.")
     return engine.ActiveCircuit.Name
 
 
@@ -101,15 +166,27 @@ def apply_bus_coordinates(engine, bus_coordinates):
     return skipped
 
 
-def set_snapshot_mode(engine, max_control_iterations=1000):
-    """One power flow, with controls (e.g. regulators) allowed to act before the final solution."""
-    run_commands(engine, ["Set ControlMode=static", "Set Mode=snapshot", f"Set MaxControlIter={max_control_iterations}"])
+CONTROL_MODES = {"active": "static", "fixed": "off"}   # regulators / capacitors may act, or hold their settings
 
 
-def set_daily_mode(engine, step_minutes, max_control_iterations=1000):
-    """Daily mode, one time step per Solve(). Step k uses value k of every daily load shape."""
-    run_commands(engine, ["Set ControlMode=static", f"Set Mode=daily number=1 stepsize={step_minutes}m",
-                          "Set hour=0", f"Set MaxControlIter={max_control_iterations}"])
+def _solve_settings(control_mode, max_iterations, max_control_iterations):
+    return [f"Set ControlMode={CONTROL_MODES.get(control_mode, control_mode)}",
+            f"Set MaxIterations={max_iterations}", f"Set MaxControlIter={max_control_iterations}"]
+
+
+def set_snapshot_mode(engine, max_control_iterations=1000, max_iterations=15, control_mode="active"):
+    """One power flow per solve(). control_mode "active": controls (regulators, capacitors,
+    inverters) may act before the final solution; "fixed": they keep their present settings.
+    max_iterations (OpenDSS default 15) limits the power-flow iterations of one solution and
+    max_control_iterations the rounds of control actions."""
+    run_commands(engine, ["Set Mode=snapshot", *_solve_settings(control_mode, max_iterations, max_control_iterations)])
+
+
+def set_daily_mode(engine, step_minutes, max_control_iterations=1000, max_iterations=15, control_mode="active"):
+    """Daily mode: a run of snapshot power flows, one time step per solve(). Step k uses value k of
+    every daily load shape. Same solve settings as set_snapshot_mode()."""
+    run_commands(engine, [f"Set Mode=daily number=1 stepsize={step_minutes}m", "Set hour=0",
+                          *_solve_settings(control_mode, max_iterations, max_control_iterations)])
 
 
 def build_circuit(engine, circuit_source, voltage_bases_kv=None, extra_commands=(), bus_coordinates=None):
@@ -128,11 +205,19 @@ def build_circuit(engine, circuit_source, voltage_bases_kv=None, extra_commands=
 
 
 def solve(engine, label="", verbose=True):
-    """Solve the power flow once. Return True if it converged."""
+    """Solve the power flow once (one snapshot, or the next step of a daily run). Return True if it
+    converged. The only place the toolkit calls OpenDSS's Solve: a power flow that does not settle
+    (e.g. #485 Max Control Iterations Exceeded) returns False instead of stopping the script."""
     solution = engine.ActiveCircuit.Solution
-    solution.Solve()
+    try:
+        solution.Solve()
+        converged = bool(solution.Converged)
+    except Exception as error:
+        if not is_solve_problem(error):
+            raise
+        converged = False
     if verbose:
-        state = "converged" if solution.Converged else "DID NOT CONVERGE"
+        state = "converged" if converged else "DID NOT CONVERGE"
         print(f"Power flow {state}{' - ' + label if label else ''} "
               f"({solution.Iterations} iterations, {solution.ControlIterations} control iterations)")
-    return solution.Converged
+    return converged

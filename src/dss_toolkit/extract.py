@@ -25,13 +25,19 @@ def node_voltages(engine):
     return dict(zip(c.AllNodeNames, c.AllBusVmagPu))
 
 
-def voltage_statistics(vnode, limits, exclude=()):
-    """Min / max / mean voltage, where they occur, and how many nodes are outside 'limits' (pu)."""
+DEAD_NODE_PU = 0.1   # nodes below this are not energized (e.g. the unused phase behind a split-phase transformer)
+
+
+def voltage_statistics(vnode, limits, exclude=(), dead_pu=DEAD_NODE_PU):
+    """Min / max / mean voltage, where they occur, and how many nodes are outside 'limits' (pu).
+    Nodes below 'dead_pu' are not energized: counted as n_dead and left out of the rest."""
     names = [n for n in vnode if not net.is_excluded(n, exclude)]
     v = np.array([vnode[n] for n in names])
+    live = v >= dead_pu
+    names, v = [n for n, keep in zip(names, live) if keep], v[live]
     return {"v_min": v.min(), "v_max": v.max(), "v_mean": v.mean(),
             "v_min_node": names[v.argmin()], "v_max_node": names[v.argmax()], "n_nodes": len(v),
-            "n_under": int((v < limits[0]).sum()), "n_over": int((v > limits[1]).sum())}
+            "n_under": int((v < limits[0]).sum()), "n_over": int((v > limits[1]).sum()), "n_dead": int((~live).sum())}
 
 
 def load_results(engine, vnode):
@@ -120,18 +126,52 @@ def regulator_taps(engine):
     return taps
 
 
-def voltage_profile(engine):
-    """{phase: (distance from the EnergyMeter [km], V [pu], node names)}; needs an EnergyMeter."""
+def voltage_profile(engine, info=None):
+    """{phase: (distance from the source [km], V [pu], node names)}. Distances come from an
+    EnergyMeter if the circuit has one; otherwise from the network tree of a
+    topology.read_network() result ('info'), so any network can be drawn."""
     c = engine.ActiveCircuit
-    return {ph: (np.array(c.AllNodeDistancesByPhase(ph)), np.array(c.AllNodeVmagPUByPhase(ph)),
-                 list(c.AllNodeNamesByPhase(ph))) for ph in (1, 2, 3)}
+    profile = {ph: (np.array(c.AllNodeDistancesByPhase(ph)), np.array(c.AllNodeVmagPUByPhase(ph)),
+                    list(c.AllNodeNamesByPhase(ph))) for ph in (1, 2, 3)}
+    if info is not None and not any(d.any() for d, _, _ in profile.values()):
+        profile = {ph: (np.array([info.tree_depth_km.get(net.bus_name(n).lower(), np.nan) for n in names]), v, names)
+                   for ph, (_, v, names) in profile.items()}
+    return profile
 
 
-def collect_results(engine, limits, exclude=()):
-    """Every snapshot result of the solved circuit in one dictionary."""
+def asset_positions(engine, assets):
+    """(assets found in the circuit, their positions in PDElements, scale to % of rating) for
+    topology.Asset objects; compute once, then read loadings with asset_loading()."""
+    position = {n.lower(): i for i, n in enumerate(engine.ActiveCircuit.PDElements.AllNames)}
+    found = [a for a in assets if a.element in position]
+    return (found, np.array([position[a.element] for a in found], dtype=int),
+            np.array([a.pct_scale for a in found], dtype=float))
+
+
+def asset_loading(engine, positions):
+    """Loading [% of rating] of every asset of asset_positions(), in one vectorised read (highest
+    conductor; transformers in % of nameplate kVA, lines in % of their rated current)."""
+    _, index, scale = positions
+    return np.asarray(engine.ActiveCircuit.PDElements.AllPctNorm(False))[index] * scale
+
+
+def solution_info(engine):
+    """Converged, iterations and control iterations of the last solve()."""
+    solution = engine.ActiveCircuit.Solution
+    return {"converged": bool(solution.Converged), "iterations": solution.Iterations,
+            "control_iterations": solution.ControlIterations}
+
+
+def collect_results(engine, limits, exclude=(), info=None):
+    """Every snapshot result of the solved circuit in one dictionary.
+    With 'info' (topology.read_network() of the same circuit) it works for any network: line
+    loading covers the rated MV / LV lines only (lines at the 400 A default are skipped), every
+    transformer and rated line is in "assets" ({element: (kind, rating, unit, loading %)}), and the
+    voltage profile uses distances along the network when there is no EnergyMeter."""
     r = {"vnode": node_voltages(engine)}
+    r.update(solution_info(engine))
     stats = voltage_statistics(r["vnode"], limits, exclude)
-    r.update({k: stats[k] for k in ("v_min", "v_max", "v_mean", "n_under", "n_over")})
+    r.update({k: stats[k] for k in ("v_min", "v_max", "v_mean", "n_under", "n_over", "n_dead")})
     r["loads"] = load_results(engine, r["vnode"])
     r["pv"] = pv_results(engine)
     r["p3"] = three_phase_bus_results(engine, exclude)
@@ -142,8 +182,16 @@ def collect_results(engine, limits, exclude=()):
     r["P_pv"] = sum(x[1] for x in r["pv"].values())
     r["reg_taps"] = regulator_taps(engine)
     r["reg_tap"] = next(iter(r["reg_taps"].values()), None)
-    r["lines"] = line_loading(engine, exclude)
-    r["profile"] = voltage_profile(engine)
+    if info is None:
+        r["lines"] = line_loading(engine, exclude)
+    else:
+        positions = asset_positions(engine, info.assets)
+        pct = asset_loading(engine, positions)
+        r["assets"] = {a.element: (a.kind, a.rating, "A" if a.kind.endswith("line") else "kVA", p)
+                       for a, p in zip(positions[0], pct)}
+        r["lines"] = {a.element.split(".", 1)[1]: (p / 100 * a.rating, a.rating, p)
+                      for a, p in zip(positions[0], pct) if a.kind.endswith("line")}
+    r["profile"] = voltage_profile(engine, info)
     return r
 
 

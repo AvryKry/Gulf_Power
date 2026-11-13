@@ -6,7 +6,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from . import network as net
+from . import extract, network as net
 
 INK, LIMIT = "#52514e", "#e34948"
 PHASE_COLOURS = {1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a"}
@@ -254,12 +254,16 @@ def plot_voltage_change_map(engine, a, b, exclude=(), highlight=(), title="Volta
 
 # --- Snapshot comparisons --------------------------------------------------------------------
 def plot_voltage_profiles(cases, labels, limits, exclude=(), title="Voltage profile"):
-    """Node voltage vs distance from the substation, one panel per case."""
+    """Node voltage vs distance from the substation, one panel per case (smaller markers on
+    networks with many nodes; nodes that are not energized are left out)."""
     fig, axes = plt.subplots(1, len(cases), figsize=(6 * len(cases), 4.5), sharey=True, squeeze=False)
     for ax, res, label in zip(axes[0], cases, labels):
+        n_nodes = sum(len(names) for _, _, names in res["profile"].values())
+        size = 6 if n_nodes <= 300 else 2
         for ph, (dist, volt, names) in res["profile"].items():
-            keep = [i for i, n in enumerate(names) if not net.is_excluded(n, exclude)]
-            ax.plot(dist[keep], volt[keep], "o", ms=6, color=PHASE_COLOURS[ph], label=f"Phase {ph}")
+            keep = [i for i, n in enumerate(names) if not net.is_excluded(n, exclude) and volt[i] >= extract.DEAD_NODE_PU]
+            ax.plot(dist[keep], volt[keep], "o", ms=size, alpha=1 if size == 6 else 0.5, color=PHASE_COLOURS[ph],
+                    label=f"Phase {ph}")
         draw_limits(ax, limits)
         ax.set_title(label); ax.set_xlabel("Distance from the substation [km]")
     axes[0][0].set_ylabel("Node voltage [pu]"); axes[0][0].legend(loc="lower left")
@@ -281,8 +285,24 @@ def draw_grouped_bars(ax, categories, series, labels, ylabel=None, value_labels=
     ax.legend()
 
 
-def plot_node_voltages(cases, labels, limits, exclude=(), title="Node voltages"):
+def plot_node_voltages(cases, labels, limits, exclude=(), title="Node voltages", max_bars=60):
+    """One bar per node and case; with more than 'max_bars' nodes, a histogram of the energized
+    node voltages by phase instead (one panel per case)."""
     nodes = [n for n in cases[0]["vnode"] if not net.is_excluded(n, exclude)]
+    if len(nodes) > max_bars:
+        fig, axes = plt.subplots(1, len(cases), figsize=(7 * len(cases), 4.5), sharey=True, squeeze=False)
+        for ax, case, label in zip(axes[0], cases, labels):
+            values = {ph: [v for n, v in case["vnode"].items() if n.rsplit(".", 1)[-1] == str(ph)
+                           and not net.is_excluded(n, exclude) and v >= extract.DEAD_NODE_PU] for ph in (1, 2, 3)}
+            dead = sum(1 for v in case["vnode"].values() if v < extract.DEAD_NODE_PU)
+            label = label + (f" ({dead} nodes not energized left out)" if dead else "")
+            ax.hist([values[ph] for ph in (1, 2, 3)], bins=40, stacked=True,
+                    color=[PHASE_COLOURS[ph] for ph in (1, 2, 3)], label=[f"Phase {ph}" for ph in (1, 2, 3)])
+            draw_limits(ax, limits, horizontal=False)
+            ax.set_xlabel("Node voltage [pu]"); ax.set_title(label)
+        axes[0][0].set_ylabel("Nodes"); axes[0][0].legend()
+        fig.suptitle(title); fig.tight_layout()
+        return fig
     fig, ax = plt.subplots(figsize=(13, 4.5))
     draw_grouped_bars(ax, nodes, [[c["vnode"][n] for n in nodes] for c in cases], labels, "Voltage [pu]")
     draw_limits(ax, limits)
@@ -291,15 +311,22 @@ def plot_node_voltages(cases, labels, limits, exclude=(), title="Node voltages")
     return fig
 
 
-def plot_power_and_loading(cases, labels, title="Power balance and line loading"):
+def plot_power_and_loading(cases, labels, title="Power balance and line loading", max_lines=None):
+    """Power balance bars and line loading bars; with 'max_lines', only the lines with the
+    highest loading (in any case) are shown, for networks with many lines."""
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), gridspec_kw={"width_ratios": [1, 1.6]})
     keys = [("Substation P\n[kW]", "P_source"), ("PV P\n[kW]", "P_pv"), ("Load P\n[kW]", "P_load"), ("Substation Q\n[kvar]", "Q_source")]
     draw_grouped_bars(axes[0], [k for k, _ in keys], [[c[k] for _, k in keys] for c in cases], labels, value_labels=True)
     axes[0].set_title("Losses: " + " -> ".join(f"{c['P_loss']:.1f}" for c in cases) + " kW")
     lines = list(cases[0]["lines"])
+    shown = ""
+    if max_lines and len(lines) > max_lines:
+        lines = sorted(lines, key=lambda n: -max(c["lines"][n][2] for c in cases))[:max_lines]
+        shown = f" ({max_lines} highest of {len(cases[0]['lines'])})"
     draw_grouped_bars(axes[1], lines, [[c["lines"][n][2] for n in lines] for c in cases], labels, "Loading [% of ampacity]")
     axes[1].axhline(100, color=LIMIT, ls="--", lw=1)
     axes[1].tick_params(axis="x", rotation=45)
+    axes[1].set_title("Line loading" + shown)
     fig.suptitle(title); fig.tight_layout()
     return fig
 

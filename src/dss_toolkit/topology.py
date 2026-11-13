@@ -351,17 +351,19 @@ def read_network(engine, rating_overrides_kva=None, fixed_load_overrides=None):
 
 def energized_nodes(engine, threshold_pu=0.1):
     """({bus: nodes with more than 'threshold_pu' voltage}, converged) from one snapshot solve of
-    the circuit as compiled. Also a quick health check of new network data."""
+    the circuit as compiled. Also a quick health check of new network data.
+    If the power flow does not settle (e.g. regulators or capacitors that keep switching), it is
+    reported as not converged and every node is taken as energized, so nothing else is blocked."""
     from . import engine as eng
     eng.set_snapshot_mode(engine)
     circuit = engine.ActiveCircuit
-    circuit.Solution.Solve()
+    converged = eng.solve(engine, verbose=False)
     found = defaultdict(set)
     for node, v in zip(circuit.AllNodeNames, circuit.AllBusVmagPu):
-        if v > threshold_pu:
-            bus, _, n = node.rpartition(".")
+        bus, _, n = node.rpartition(".")
+        if v > threshold_pu or not converged:
             found[bus.lower()].add(int(n))
-    return found, bool(circuit.Solution.Converged)
+    return found, converged
 
 
 def _line_bus1(lines, element):
