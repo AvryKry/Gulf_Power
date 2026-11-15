@@ -4,6 +4,9 @@ print_table() is the only brick that formats text; every other report brick prep
 passes them to it. compare_* bricks print two cases side by side.
 """
 import math
+from collections import Counter
+
+import numpy as np
 
 from . import extract
 
@@ -317,7 +320,6 @@ def network_checks(info, coords_share=None, anonymise=None):
     only counts and anonymised names, so they can be shared. coords_share = share of buses with
     coordinates (0-1); None leaves that check out (e.g. a power flow that draws no map)."""
     anon = anonymise or Anonymiser(False)
-    from collections import Counter
     kinds = Counter(a.kind for a in info.assets)
     phases = Counter(info.load_phases.values())
     levels = sorted({round(v, 3) for v in info.bus_kv_ll.values() if v > 0}, reverse=True)
@@ -325,7 +327,12 @@ def network_checks(info, coords_share=None, anonymise=None):
     unrated = sum(1 for e, *_ in info.branches if e.startswith("line.")) - kinds.get("mv_line", 0) - kinds.get("lv_line", 0)
     rows = [
         ["PASS", "circuit", anon(info.circuit_name, "circuit")],
-        ["PASS", "source bus", anon(info.source_bus, "bus")],
+        ["PASS" if info.sources else "WARN", "voltage sources (all are solved together)",
+         f"{len(info.sources) or 1}: " + ", ".join(f"{anon(x['name'], 'source')} at {x['kv_ll']:g} kV feeds "
+                                                  f"{sum(1 for v in info.source_of.values() if v == x['name'])} buses"
+                                                  for x in info.sources[:10]) + (" ..." if len(info.sources) > 10 else "")],
+        ["PASS" if not info.source_ties else "WARN", "ties between the areas of different sources (meshed)",
+         f"{len(info.source_ties)}" + (" (those sources can feed each other)" if info.source_ties else "")],
         ["PASS" if info.buses else "FAIL", "buses", f"{len(info.buses)}"],
         ["PASS" if levels else "FAIL", "voltage levels (kV line-to-line)", ", ".join(f"{v:g}" for v in levels) or "none"],
         ["PASS" if no_base == 0 else "WARN", "buses without a voltage base",
@@ -335,14 +342,19 @@ def network_checks(info, coords_share=None, anonymise=None):
          "regulator / capacitor controls (phase checks assume every phase is live)"],
         ["PASS" if not info.islands else "WARN", "parts not connected to the source",
          f"{len(info.islands)}" + (f" ({sum(len(i) for i in info.islands)} buses)" if info.islands else "")],
-        ["PASS" if kinds.get("head_transformer") else "WARN", "head (substation) transformers", f"{kinds.get('head_transformer', 0)}"],
-        ["PASS", "other transformers", f"{kinds.get('transformer', 0)}"],
+        ["PASS", "head (substation) transformers", f"{kinds.get('head_transformer', 0)} (0 = sources modelled at "
+         "distribution voltage feed the network directly)"],
+        ["PASS", "transformer classes", ", ".join(f"{c.replace('_', '-')}: {n}" for c, n in
+                                                   sorted(Counter(info.transformer_class.values()).items())) or "none"],
         ["PASS", "rated lines (MV / LV)", f"{kinds.get('mv_line', 0)} / {kinds.get('lv_line', 0)}"],
         ["PASS" if unrated <= 0 else "WARN", "lines without a rating in the data (not checked)", f"{max(unrated, 0)}"],
         ["PASS" if info.loads else "FAIL", "loads",
          f"{len(info.loads)} (" + ", ".join(f"{k}: {v}" for k, v in sorted(phases.items())) + ")"],
         ["PASS", "loads with a fixed shape", f"{len(info.fixed_loads)}"],
-        ["PASS", "single-phase customers whose phase can be randomized", f"{len(info.tap_points)}"]]
+        ["PASS", "single-phase customers whose phase can be randomized", f"{len(info.tap_points)}"],
+        ["PASS" if not info.device_notes else "WARN", "devices found (capacitors, fuses, reclosers, switches, regulators)",
+         ", ".join(f"{k}: {n}" for k, n in sorted(Counter(info.devices.values()).items())) or "none"
+         + ("" if not info.device_notes else "; " + "; ".join(info.device_notes))]]
     if coords_share is not None:
         rows.append(["PASS" if coords_share >= 0.999 or coords_share == 0 else "WARN", "buses with coordinates in the data",
                      f"{100 * coords_share:.1f} %" + ("" if coords_share >= 0.999 else " (the rest are placed automatically)")])
@@ -355,3 +367,89 @@ def print_network_checks(info, coords_share=None, anonymise=None):
     print(f"\nNetwork '{rows[0][2]}'")
     for status, label, detail in rows[1:]:
         check_line(status, label, detail)
+
+
+# --- Troubleshooting tables (Tut 4c): short on purpose ---------------------------------------------
+GREAT_DEVIATION = (10.0, 110.0)   # % of nominal: below / above is the far end of the spectrum
+
+
+def _element_group(info, element):
+    """'MV line', 'LV line', or the transformer class ('distribution transformer', ...)."""
+    if element.startswith("transformer."):
+        return f"{info.transformer_class.get(element, 'other').replace('_', '-')} transformer"
+    asset = _assets_by_element(info).get(element)
+    return "MV line" if asset and asset.kind == "mv_line" else ("LV line" if asset else "line (no rating)")
+
+
+def _assets_by_element(info, _cache={}):
+    if _cache.get("id") != id(info):
+        _cache.clear()
+        _cache.update({"id": id(info), "map": {a.element: a for a in info.assets}})
+    return _cache["map"]
+
+
+def sources_table(info, results):
+    """One row per source: bus, kV, P, Q, buses fed, transformers of each class, devices, ties."""
+    assets = _assets_by_element(info)
+    rows = []
+    for src in info.sources:
+        name = src["name"]
+        fed = {b for b, s in info.source_of.items() if s == name}
+        p, q = results.get("source_pq", {}).get(name, (np.nan, np.nan))
+        tx = [e for e, a in assets.items() if e.startswith("transformer.") and a.source == name]
+        count = lambda c: sum(1 for e in tx if info.transformer_class.get(e) == c)
+        rows.append([name, src["bus"], src["kv_ll"], round(p, 1), round(q, 1), len(fed), sum(1 for e in tx if assets[e].kind == "head_transformer"),
+                     count("substation"), count("distribution"), count("regulator"), count("step_up"),
+                     sum(1 for e, a, b in info.source_ties if info.source_of.get(a) == name or info.source_of.get(b) == name)])
+    return ["Source", "Bus", "kV (LL)", "P (kW)", "Q (kvar)", "Buses fed", "Head transformers", "Substation transformers",
+            "Distribution transformers", "Regulators", "Step-up transformers", "Ties to other sources"], rows
+
+
+def out_of_range_table(info, results, great=GREAT_DEVIATION):
+    """Only the elements at the far ends: lines / transformers above great[1] % of their rating,
+    buses above great[1] % of nominal voltage, and buses with every node below great[0] %
+    (not energized). Sorted from the furthest out."""
+    rows = []
+    for element, f in results.get("elements", {}).items():
+        if f["loading_pct"] == f["loading_pct"] and f["loading_pct"] > great[1]:
+            a = _assets_by_element(info).get(element)
+            rows.append([element, _element_group(info, element), info.source_of.get(_bus_of(info, element), ""),
+                         a.code if a else "", a.rating if a else np.nan, "kVA" if element.startswith("transformer.") else "A",
+                         round(f["loading_pct"], 1), "% of rating"])
+    for bus, (lo, hi) in results.get("bus_v", {}).items():
+        if hi > great[1] / 100:
+            rows.append([bus, "bus", info.source_of.get(bus, ""), "", info.bus_kv_ll.get(bus, np.nan), "kV",
+                         round(100 * hi, 1), "% of nominal V (highest phase)"])
+        elif hi < great[0] / 100:
+            rows.append([bus, "bus", info.source_of.get(bus, ""), "", info.bus_kv_ll.get(bus, np.nan), "kV",
+                         round(100 * hi, 1), "% of nominal V (not energized)"])
+    rows.sort(key=lambda r: -abs(r[6] - 100))
+    return ["Element", "Type", "Nearest source", "Code", "Rating", "Rating unit", "Value", "Value unit"], rows
+
+
+def loading_by_code_table(info, results, great=GREAT_DEVIATION):
+    """One row per group of similar elements (type + line / transformer code + rating): how many,
+    how many carry nothing, below great[0] %, above great[1] %, median and highest loading."""
+    groups = {}
+    assets = _assets_by_element(info)
+    for element, f in results.get("elements", {}).items():
+        a = assets.get(element)
+        key = (_element_group(info, element), a.code if a else "(no rating)", a.rating if a else np.nan)
+        groups.setdefault(key, []).append(f["loading_pct"])
+    rows = []
+    for (group, code, rating), values in groups.items():
+        v = np.array(values, dtype=float)
+        rated = v[~np.isnan(v)]
+        rows.append([group, code, rating, len(v), int((rated <= 1e-9).sum()), int((rated < great[0]).sum()),
+                     int((rated > great[1]).sum()), round(float(np.median(rated)), 1) if len(rated) else np.nan,
+                     round(float(rated.max()), 1) if len(rated) else np.nan])
+    rows.sort(key=lambda r: (-(r[6] or 0), -(r[8] if r[8] == r[8] else -1)))
+    return ["Type", "Code", "Rating", "Count", "At 0 %", f"Below {great[0]:g} %", f"Above {great[1]:g} %",
+            "Median loading (%)", "Highest loading (%)"], rows
+
+
+def _bus_of(info, element, _cache={}):
+    if _cache.get("id") != id(info):
+        _cache.clear()
+        _cache.update({"id": id(info), "map": {e: a for e, a, _, _, _ in info.branches}})
+    return _cache["map"].get(element)

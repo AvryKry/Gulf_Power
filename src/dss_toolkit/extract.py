@@ -127,13 +127,14 @@ def regulator_taps(engine):
 
 
 def voltage_profile(engine, info=None):
-    """{phase: (distance from the source [km], V [pu], node names)}. Distances come from an
-    EnergyMeter if the circuit has one; otherwise from the network tree of a
-    topology.read_network() result ('info'), so any network can be drawn."""
+    """{phase: (distance from the source [km], V [pu], node names)}. With 'info' (a
+    topology.read_network() result) distances are measured along the network from each node's
+    nearest source, for any number of sources; without it they come from an EnergyMeter (nodes
+    outside the meter's zone then sit at 0 km)."""
     c = engine.ActiveCircuit
     profile = {ph: (np.array(c.AllNodeDistancesByPhase(ph)), np.array(c.AllNodeVmagPUByPhase(ph)),
                     list(c.AllNodeNamesByPhase(ph))) for ph in (1, 2, 3)}
-    if info is not None and not any(d.any() for d, _, _ in profile.values()):
+    if info is not None:
         profile = {ph: (np.array([info.tree_depth_km.get(net.bus_name(n).lower(), np.nan) for n in names]), v, names)
                    for ph, (_, v, names) in profile.items()}
     return profile
@@ -155,6 +156,69 @@ def asset_loading(engine, positions):
     return np.asarray(engine.ActiveCircuit.PDElements.AllPctNorm(False))[index] * scale
 
 
+def element_flows(engine, info=None):
+    """{element: dict} for every line and transformer, from one vectorised read of all
+    power-delivery elements: P, Q [kW, kvar] entering at terminal 1 (negative = reverse flow), pf,
+    loss_kw, loss_pct (losses in % of the power carried), current_a (highest conductor) and
+    loading_pct (% of rating; NaN for lines without a rating in the data, using info.assets when
+    given so transformers are in % of nameplate kVA)."""
+    pd_ = engine.ActiveCircuit.PDElements
+    names = [n.lower() for n in pd_.AllNames]
+    powers = np.asarray(pd_.AllPowers, dtype=float)
+    terminals = np.asarray(pd_.AllNumTerminals, dtype=int)
+    conductors = np.asarray(pd_.AllNumConductors, dtype=int)
+    current = np.asarray(pd_.AllMaxCurrents(False), dtype=float)
+    pct = np.asarray(pd_.AllPctNorm(False), dtype=float)
+    from .topology import unrated_lines
+    scale = {a.element: a.pct_scale for a in info.assets} if info is not None else {}
+    unrated = {f"line.{n}" for n in unrated_lines(engine)}
+    flows, start = {}, 0
+    for k, name in enumerate(names):
+        n = terminals[k] * conductors[k]
+        block = powers[2 * start: 2 * (start + n)]
+        start += n
+        if not name.startswith(("line.", "transformer.")):
+            continue
+        p1 = block[0: 2 * conductors[k]: 2].sum()
+        q1 = block[1: 2 * conductors[k]: 2].sum()
+        loss = block[0::2].sum()
+        s1 = np.hypot(p1, q1)
+        through = max(abs(p1), abs(p1 - loss))
+        flows[name] = {"P": p1, "Q": q1, "pf": abs(p1) / s1 if s1 > 1e-6 else np.nan, "loss_kw": loss,
+                       "loss_pct": 100 * abs(loss) / through if through > 1e-6 else np.nan, "current_a": current[k],
+                       "loading_pct": np.nan if name in unrated else pct[k] * scale.get(name, 1.0)}
+    return flows
+
+
+def bus_voltage_range(vnode, dead_pu=DEAD_NODE_PU):
+    """{bus: (lowest, highest) node voltage in pu} from node_voltages(). The lowest is taken over
+    energized nodes only (a dead phase behind a split-phase transformer does not count); a bus
+    with no energized node gets (highest, highest)."""
+    nodes = {}
+    for node, v in vnode.items():
+        nodes.setdefault(node.rsplit(".", 1)[0], []).append(v)
+    found = {}
+    for bus, values in nodes.items():
+        live = [v for v in values if v >= dead_pu]
+        found[bus] = (min(live) if live else max(values), max(values))
+    return found
+
+
+def source_powers(engine):
+    """{source: (P, Q)} supplied by every voltage source [kW, kvar]."""
+    c = engine.ActiveCircuit
+    vs = c.Vsources
+    found = {}
+    i = vs.First
+    while i:
+        c.SetActiveElement(f"Vsource.{vs.Name}")
+        p = np.asarray(c.ActiveCktElement.Powers)
+        half = len(p) // 2
+        found[vs.Name.lower()] = (-p[:half:2].sum(), -p[1:half:2].sum())
+        i = vs.Next
+    return found
+
+
 def solution_info(engine):
     """Converged, iterations and control iterations of the last solve()."""
     solution = engine.ActiveCircuit.Solution
@@ -166,8 +230,10 @@ def collect_results(engine, limits, exclude=(), info=None):
     """Every snapshot result of the solved circuit in one dictionary.
     With 'info' (topology.read_network() of the same circuit) it works for any network: line
     loading covers the rated MV / LV lines only (lines at the 400 A default are skipped), every
-    transformer and rated line is in "assets" ({element: (kind, rating, unit, loading %)}), and the
-    voltage profile uses distances along the network when there is no EnergyMeter."""
+    transformer and rated line is in "assets" ({element: (kind, rating, unit, loading %)}), every
+    line and transformer is in "elements" (element_flows()), "bus_v" has each bus's voltage range,
+    "source_pq" each source's power, and the voltage profile uses distances along the network
+    from the nearest source."""
     r = {"vnode": node_voltages(engine)}
     r.update(solution_info(engine))
     stats = voltage_statistics(r["vnode"], limits, exclude)
@@ -191,6 +257,9 @@ def collect_results(engine, limits, exclude=(), info=None):
                        for a, p in zip(positions[0], pct)}
         r["lines"] = {a.element.split(".", 1)[1]: (p / 100 * a.rating, a.rating, p)
                       for a, p in zip(positions[0], pct) if a.kind.endswith("line")}
+        r["elements"] = element_flows(engine, info)
+        r["bus_v"] = bus_voltage_range(r["vnode"])
+        r["source_pq"] = source_powers(engine)
     r["profile"] = voltage_profile(engine, info)
     return r
 

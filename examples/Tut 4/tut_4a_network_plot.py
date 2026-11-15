@@ -32,7 +32,7 @@ BUS_COORDINATES_FILE_NAME = "BusCoords.dss"   # 'bus, x, y' list or OpenDSS SetB
 # CRE21 (Team Nando Tutorial 4):  DATA_FOLDER = "tut_4_data", MASTER_FILE_NAME = "Master.txt",
 #                                 VOLTAGE_BASES_KV = (66.0, 22.0, 0.4), BUS_COORDINATES_FILE_NAME = None
 ANONYMISE_REPORT = True                           # True: codes instead of names in everything printed
-RESULTS_FOLDER = "results/tut4"                    # from the repo root; the map goes in <circuit>/network_map/
+RESULTS_FOLDER = "results/tut4a"                    # from the repo root; the map goes in <circuit>/network_map/
 
 # =============================================================================================
 # 1. Compile

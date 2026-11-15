@@ -31,14 +31,14 @@ from dss_toolkit import engine as eng, extract, paths, plots, reports, results a
 # Settings, in selection order
 # =============================================================================================
 # ---- 1. Network: a folder and a master file (.dss or .txt), nothing else ----------------------
-DATA_FOLDER = "HYDRO_DSS"                         # folder name, path from the repo root, or full path
-MASTER_FILE_NAME = "Master.dss"          # .dss or .txt master file in DATA_FOLDER
-VOLTAGE_BASES_KV = (22.0, 0.4)                     # line-to-line; None = set by the data (e.g. SetkVBase lines)
-BUS_COORDINATES_FILE_NAME = "BusCoords.dss"   # 'bus, x, y' list or OpenDSS SetBusXY file; None = none
+DATA_FOLDER = "tut_3_data"                                   # folder name, path from the repo root, or full path
+MASTER_FILE_NAME = "LVcircuit-master.txt"
+VOLTAGE_BASES_KV = (22.0, 0.4)                               # line-to-line; None = set by the data (SetkVBase lines)
+BUS_COORDINATES_FILE_NAME = "LVcircuit-buscoords.txt"        # kept for any SetkVBase lines in it (no map is drawn);
                                                              # None = no coordinates file
 # CRE21 (Team Nando Tutorial 4, its tut_4_data folder in examples/Tut 4/):
-#   DATA_FOLDER = "HYDRO_DSS"; MASTER_FILE_NAME = "Master.dss"; VOLTAGE_BASES_KV = (66.0, 22.0, 0.4)
-#   BUS_COORDINATES_FILE_NAME = "BusCoords.dss"
+#   DATA_FOLDER = "tut_4_data"; MASTER_FILE_NAME = "Master.txt"; VOLTAGE_BASES_KV = (66.0, 22.0, 0.4)
+#   BUS_COORDINATES_FILE_NAME = None
 
 # ---- 2. Power flow ---------------------------------------------------------------------------
 LOAD_MULTIPLIER = 1.0                                        # 1.0 = every load at the kW / kvar written in the files
@@ -50,7 +50,7 @@ MAX_CONTROL_ITERATIONS = 1000                                # rounds of control
 VOLTAGE_LIMITS_PU = (0.94, 1.10)                             # nodes and customers outside these are flagged
 
 # ---- 4. Outputs (everything is saved to files) ----------------------------------------------
-RESULTS_FOLDER = "results/tut4b"                              # from the repo root; then <network>/snapshot_power_flow/
+RESULTS_FOLDER = "results/tut4"                              # from the repo root; then <network>/snapshot_power_flow/
 N_HIGHEST_LOADED_LINES = 10                                  # lines shown in fig02 on large networks (all are in lines.csv)
 ANONYMISE_REPORT = False                                     # True: codes instead of names in the terminal text
 
@@ -128,11 +128,15 @@ saved = res.save_tables(tables, run_folder)
 # =============================================================================================
 # 4. Figures (saved only)
 # =============================================================================================
-case = f"loads x {LOAD_MULTIPLIER:g}, controls {used_control_mode}"
+# Case label under each figure title: what the power flow assumed (it changes only if the settings do)
+case = ("Loads as in the files" if LOAD_MULTIPLIER == 1 else f"Loads x {LOAD_MULTIPLIER:g} of the files") + "; " + (
+    "regulators and capacitors allowed to act" if used_control_mode == "active" else
+    "regulators and capacitors held at their settings" + (" (they did not settle when allowed to act)"
+                                                          if used_control_mode != "fixed" else ""))
 plots.save_figure(plots.plot_voltage_profiles([results], [case], VOLTAGE_LIMITS_PU,
-                                              title=f"{network_name}: voltage vs distance from the source"),
+                                              title=f"{network_name}: voltage vs distance from the nearest source"),
                   run_folder / "fig01_voltage_profile.png")
-plots.save_figure(plots.plot_power_and_loading([results], [case], title=f"{network_name}: power balance and line loading",
+plots.save_figure(plots.plot_power_and_loading([results], [case], title=f"{network_name}: active power and line loading",
                                                max_lines=N_HIGHEST_LOADED_LINES),
                   run_folder / "fig02_power_and_line_loading.png")
 plots.save_figure(plots.plot_node_voltages([results], [case], VOLTAGE_LIMITS_PU, title=f"{network_name}: node voltages"),

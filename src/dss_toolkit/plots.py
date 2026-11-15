@@ -265,7 +265,7 @@ def plot_voltage_profiles(cases, labels, limits, exclude=(), title="Voltage prof
             ax.plot(dist[keep], volt[keep], "o", ms=size, alpha=1 if size == 6 else 0.5, color=PHASE_COLOURS[ph],
                     label=f"Phase {ph}")
         draw_limits(ax, limits)
-        ax.set_title(label); ax.set_xlabel("Distance from the substation [km]")
+        ax.set_title(label); ax.set_xlabel("Distance from the nearest source [km]")
     axes[0][0].set_ylabel("Node voltage [pu]"); axes[0][0].legend(loc="lower left")
     fig.suptitle(title); fig.tight_layout()
     return fig
@@ -278,11 +278,12 @@ def draw_grouped_bars(ax, categories, series, labels, ylabel=None, value_labels=
     for i, (values, label) in enumerate(zip(series, labels)):
         bars = ax.bar(x + (i - (len(series) - 1) / 2) * width, values, width, color=CASE_COLOURS[i], label=label)
         if value_labels:
-            ax.bar_label(bars, fmt="%.0f", fontsize=8)
+            ax.bar_label(bars, fmt="%.3g", fontsize=8)
     ax.set_xticks(x, categories, rotation=90 if len(categories) > 12 else 0)
     if ylabel:
         ax.set_ylabel(ylabel)
-    ax.legend()
+    if len(series) > 1:                    # one series: its label goes in the title instead
+        ax.legend()
 
 
 def plot_node_voltages(cases, labels, limits, exclude=(), title="Node voltages", max_bars=60):
@@ -307,17 +308,20 @@ def plot_node_voltages(cases, labels, limits, exclude=(), title="Node voltages",
     draw_grouped_bars(ax, nodes, [[c["vnode"][n] for n in nodes] for c in cases], labels, "Voltage [pu]")
     draw_limits(ax, limits)
     ax.set_ylim(min(limits[0], min(min(c["vnode"][n] for n in nodes) for c in cases)) - 0.02, limits[1] + 0.05)
-    ax.set_title(title); fig.tight_layout()
+    ax.set_title(title if len(cases) > 1 else f"{title}\n{labels[0]}"); fig.tight_layout()
     return fig
 
 
-def plot_power_and_loading(cases, labels, title="Power balance and line loading", max_lines=None):
-    """Power balance bars and line loading bars; with 'max_lines', only the lines with the
-    highest loading (in any case) are shown, for networks with many lines."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), gridspec_kw={"width_ratios": [1, 1.6]})
-    keys = [("Substation P\n[kW]", "P_source"), ("PV P\n[kW]", "P_pv"), ("Load P\n[kW]", "P_load"), ("Substation Q\n[kvar]", "Q_source")]
-    draw_grouped_bars(axes[0], [k for k, _ in keys], [[c[k] for _, k in keys] for c in cases], labels, value_labels=True)
-    axes[0].set_title("Losses: " + " -> ".join(f"{c['P_loss']:.1f}" for c in cases) + " kW")
+def plot_power_and_loading(cases, labels, title="Active power and line loading", max_lines=None):
+    """Left: active power of each case - sources, PV, loads, and losses split into lines and
+    transformers [kW]. Right: line loading bars (% of ampacity); with 'max_lines', only the
+    lines with the highest loading (in any case) are shown, for networks with many lines."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.5), gridspec_kw={"width_ratios": [1.1, 1.5]})
+    keys = [("Sources", lambda c: c["P_source"]), ("PV", lambda c: c["P_pv"]), ("Loads", lambda c: c["P_load"]),
+            ("Line\nlosses", lambda c: c["P_line_loss"]), ("Transformer\nlosses", lambda c: c["P_loss"] - c["P_line_loss"])]
+    draw_grouped_bars(axes[0], [k for k, _ in keys], [[f(c) for _, f in keys] for c in cases], labels,
+                      "Active power [kW]", value_labels=True)
+    axes[0].set_title("Active power")
     lines = list(cases[0]["lines"])
     shown = ""
     if max_lines and len(lines) > max_lines:
@@ -326,8 +330,8 @@ def plot_power_and_loading(cases, labels, title="Power balance and line loading"
     draw_grouped_bars(axes[1], lines, [[c["lines"][n][2] for n in lines] for c in cases], labels, "Loading [% of ampacity]")
     axes[1].axhline(100, color=LIMIT, ls="--", lw=1)
     axes[1].tick_params(axis="x", rotation=45)
-    axes[1].set_title("Line loading" + shown)
-    fig.suptitle(title); fig.tight_layout()
+    axes[1].set_title("Line loading, highest conductor" + shown)
+    fig.suptitle(title if len(cases) > 1 else f"{title}\n{labels[0]}"); fig.tight_layout()
     return fig
 
 
