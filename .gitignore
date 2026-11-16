@@ -9,3 +9,5 @@ tut_2_data
 tut_3_data
 *.pyc
 tut_4_data
+# build output from "pip install -e ." (regenerated on every install)
+*.egg-info/
