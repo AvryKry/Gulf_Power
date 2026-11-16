@@ -36,10 +36,10 @@ from dss_toolkit import engine as eng, extract, interactive, paths, reports, res
 # Settings, in selection order
 # =============================================================================================
 # ---- 1. Network: a folder and a master file (.dss or .txt), nothing else ----------------------
-DATA_FOLDER = "HYDRO_DSS"                         # folder name, path from the repo root, or full path
-MASTER_FILE_NAME = "Master.dss"          # .dss or .txt master file in DATA_FOLDER
+DATA_FOLDER = "tut_4_data"                         # folder name, path from the repo root, or full path
+MASTER_FILE_NAME = "Master.txt"          # .dss or .txt master file in DATA_FOLDER
 VOLTAGE_BASES_KV = (22.0, 0.4)                     # line-to-line; None = set by the data (e.g. SetkVBase lines)
-BUS_COORDINATES_FILE_NAME = "BusCoords.dss"   # 'bus, x, y' list or OpenDSS SetBusXY file; None = none
+BUS_COORDINATES_FILE_NAME = None   # 'bus, x, y' list or OpenDSS SetBusXY file; None = none
 # CRE21 (Team Nando Tutorial 4, its tut_4_data folder in examples/Tut 4/):
 #   DATA_FOLDER = "tut_4_data"; MASTER_FILE_NAME = "Master.txt"; VOLTAGE_BASES_KV = (66.0, 22.0, 0.4)
 #   BUS_COORDINATES_FILE_NAME = None
