@@ -4,7 +4,7 @@ Everyone can change anything here: the toolkit (`src/dss_toolkit/`), the example
 
 **main → your branch → Pull Request → teammate approves → Squash and merge → main**
 
-Flow diagrams of this process are in the `diagrams/` folder.
+Flow diagrams of this process are in the 'z.REPO INSTRUCTIONS' folder.
 
 ## Rules
 1. `main` is the only permanent branch. Nobody pushes to it directly.
@@ -28,7 +28,6 @@ git config --global pull.ff only
 The sample data folders (`tut_2_data`, `tut_3_data`, `tut_4_data` and the Tut 1.1 dss files) are not in git. Ask Avry for them.
 
 ## Every task
-**0. Claim it.** Open a GitHub Issue that says what you'll do and which files you'll change. If someone else is working on one of those files, talk to them first.
 
 **1. Start a branch:**
 ```
@@ -58,7 +57,7 @@ Use `merge`, never `rebase`.
 ```
 git push -u origin yourname/short-task-name
 ```
-Open the link git prints and fill in the checklist. A teammate approves, then you click **Squash and merge**.
+Open the link git prints and fill in the checklist, make sure you name the PR title well (desscription of changes, justification, any other notes) since this is whta is visible to everyone. A teammate approves, then you click **Squash and merge**.
 
 **6. Clean up:**
 ```
