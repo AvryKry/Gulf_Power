@@ -10,12 +10,11 @@
 #      step-up) and devices (capacitors, fuses, reclosers, switches, regulators).
 #   2. Solves one snapshot power flow (as in Tut 4b, again with fixed controls if it does not settle).
 #   3. Saves network_map.html: open it in a browser. The panel beside the map picks a mode
-#      (names and phases, voltage / current / power / power factor / losses lenses, sources lens,
-#      devices) and ticks element types and value bands on and off. The sources lens colours every
-#      bus, line and transformer by the source whose area it is in; tick each source to show or hide
-#      its area (ties between areas and parts no source reaches have their own rows). Changing
-#      mode keeps the zoom, so a problem found in a lens can be zoomed into and identified in
-#      "Names and phases".
+#      (names and phases, voltage / current / power / power factor / losses lenses, a source lens,
+#      devices) and ticks element types and value bands on and off. The source lens (networks with
+#      two or more sources) colours every bus, line and transformer by the source that feeds it and
+#      has one tick per source to show or hide its area. Changing mode keeps the zoom, so a problem
+#      found in a lens can be zoomed into and identified in "Names and phases".
 #   4. Saves three short tables: sources.csv (one row per source), out_of_range.csv (only the
 #      elements at the far ends: above 110 % of their rating or nominal voltage, or not energized)
 #      and loading_by_code.csv (loading of each line / transformer code: how many at 0 %, below
