@@ -4,11 +4,11 @@ The page has the map and, beside it, a panel (part of the page, not of the plot,
 shown, whatever the window size or tab layout; on narrow windows it moves above the map):
   - Mode: what the map shows. "Names and phases" (elements by type, loads and PV by phase),
     lenses that colour elements by how far they are from normal - voltage (buses), current
-    (lines), power (transformers), power factor and losses (lines and transformers), and the
-    source lens (every bus, line and transformer coloured by the voltage source that feeds it,
-    one tick per source; only for networks with two or more sources) - and "Devices"
-    (capacitors, fuses, reclosers, switches, regulators, sources). Lenses need power flow
-    results (network_figure(..., results=...)).
+    (lines), power (transformers), power factor and losses (lines and transformers) - and
+    "Devices" (capacitors, fuses, reclosers, switches, regulators, sources). Lenses need power
+    flow results (network_figure(..., results=...)). "Sources lens (areas)" colours every bus,
+    line and transformer by the source that feeds it (its nearest source), with one tick box per
+    source, plus the ties between sources' areas and parts no source reaches; it needs no results.
   - Two checklists: element types and value bands (each with its colour and how many elements
     are in it). An element is shown when both its type and its band are ticked. In the source
     lens the bands are the sources: unticking one hides the area it feeds and its triangle.
@@ -33,9 +33,8 @@ OUTLINE = "#d3d1c7"
 GREAT_DEVIATION = (0.10, 1.10)      # fraction of nominal: the far ends of every lens start here
 NEAR_LIMIT_PU = 0.02                # voltage band just inside each limit
 
-MODES = {"names": "Names and phases", "voltage": "Voltage lens (buses)", "current": "Current lens (lines)",
-         "power": "Power lens (transformers)", "pf": "Power factor lens", "losses": "Losses lens",
-         "sources": "Source lens (areas)", "devices": "Devices"}
+MODES = {"names": "Names and phases", "sources": "Sources lens (areas)", "voltage": "Voltage lens (buses)", "current": "Current lens (lines)",
+         "power": "Power lens (transformers)", "pf": "Power factor lens", "losses": "Losses lens", "devices": "Devices"}
 
 # value bands: (label, low, high, colour); a value v is in a band when low <= v < high
 LOADING_BANDS = [("0 % (no current)", 0, 1e-9, "#2c2c2a"), ("below 1 %", 1e-9, 1, "#3c3489"),
@@ -51,10 +50,11 @@ SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#c9a100", "#0f9fb
 TIES = ("Ties between sources", "#d4537e")   # lines / transformers joining the areas of two sources
 NOT_FED = ("not fed by any source", "#b4b2a9")
 NO_RATING, NO_FLOW, REVERSE = ("no rating in the data", "#b4b2a9"), ("no flow (below 1 kVA)", "#b4b2a9"), ("reverse flow", "#d4537e")
-# sources lens: one colour per source (repeats after the tenth), ties and parts no source reaches
-SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#eda100", "#a32d2d", "#3b6d11", "#5dcaa5", "#854f0b",
-                  "#7f77dd"]
-SOURCE_TIE, NO_SOURCE = ("ties between sources' areas", "#d4537e"), ("no source reached", "#2c2c2a")
+# Sources lens: one colour per source, in the order of info.sources (repeats after ten)
+SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#8e44ad", "#d4a017", "#0f8b8d", "#c0392b", "#8d5524", "#6b8e23", "#1f2f6b"]
+SOURCE_TIES = ("Ties between sources", "#d4537e")
+NOT_REACHED = ("Not reached by any source", "#b4b2a9")
+LENS_MODES = ["sources", "voltage", "current", "power", "pf", "losses"]
 DEVICE_STYLE = {"capacitor": ("Capacitors", "#185fa5", "square-open", 13), "fuse": ("Fuses", "#a32d2d", "x", 11),
                 "recloser": ("Reclosers", "#d85a30", "diamond", 12), "switch": ("Switches", "#3b6d11", "square", 10),
                 "regulator": ("Regulators", "#534ab7", "hexagon", 13)}
@@ -90,7 +90,7 @@ def band_of(value, bands):
 
 # --- Traces ------------------------------------------------------------------------------------
 CONTEXT = "outline and sources (no value)"
-BAND_TITLES = {"names": "Phases", "sources": "Sources (tick to show or hide each one's area)", "voltage": "Voltage bands", "current": "Loading bands (% of rated current)",
+BAND_TITLES = {"names": "Phases", "sources": "Sources (area each one feeds)", "voltage": "Voltage bands", "current": "Loading bands (% of rated current)",
                "power": "Loading bands (% of kVA rating)", "pf": "Power factor bands", "losses": "Loss bands (% of power carried)",
                "sources": "Sources (tick to show)", "devices": "Bands"}
 
@@ -171,7 +171,7 @@ def network_figure(info, coords, title="Network map", der=None, customer_phases=
     # ---- outline of every line, shown under the lenses and devices --------------------------------
     outline_pairs = [(a, b) for e, (a, b, _, _) in ends.items()]
     traces.append(_segments(go, outline_pairs, coords, OUTLINE, 1,
-                            _meta(["voltage", "current", "power", "pf", "losses", "sources", "devices"], "Network outline")))
+                            _meta([m for m in LENS_MODES if m != "sources"] + ["devices"], "Network outline")))
 
     # ---- Names and phases ---------------------------------------------------------------------------
     groups = {}
@@ -216,9 +216,9 @@ def network_figure(info, coords, title="Network map", der=None, customer_phases=
         if src["bus"] in coords:
             pq = (results or {}).get("source_pq", {}).get(src["name"])
             extra = f"<br>P {pq[0]:.1f} kW, Q {pq[1]:.1f} kvar" if pq else ""
-            src_points[src["name"]] = ((*coords[src["bus"]], src["name"], f"<b>Source {src['name']}</b><br>bus {src['bus']}, {src['kv_ll']:g} kV{extra}"))
-    traces.append(_markers(go, list(src_points.values()), "#2c2c2a", 15,
-                           _meta([m for m in MODES if m != "sources"], "Sources", CONTEXT, "#2c2c2a"), "triangle-up"))
+            src_points.append((*coords[src["bus"]], src["name"], f"<b>Source {src['name']}</b><br>bus {src['bus']}, {src['kv_ll']:g} kV{extra}"))
+    traces.append(_markers(go, src_points, "#2c2c2a", 15, _meta([m for m in MODES if m != "sources"], "Sources", CONTEXT, "#2c2c2a"),
+                           "triangle-up"))
     load_groups = {}
     for load, data in info.loads.items():
         bus = data["bus"].split(".")[0].lower()
@@ -265,8 +265,10 @@ def network_figure(info, coords, title="Network map", der=None, customer_phases=
         name, colour, symbol, size = DEVICE_STYLE.get(kind, (kind, "#5f5e5a", "circle", 10))
         traces.append(_markers(go, points, colour, size, _meta("devices", name, CONTEXT, colour), symbol))
 
-    # ---- Sources lens (topology only) and value lenses (need results) -----------------------------------
-    traces += _source_lens(go, info, coords, ends, flows, results, src_points)
+    # ---- Sources lens (needs only the network) ----------------------------------------------------------
+    traces += _source_lens(go, info, coords, flows, ends, src_points)
+
+    # ---- Lenses (need results) --------------------------------------------------------------------------
     if results:
         traces += _voltage_lens(go, info, coords, results, bands["voltage"])
         traces += _flow_lens(go, info, coords, flows, ends, "current", lambda e: e.startswith("line."),
@@ -285,7 +287,7 @@ def network_figure(info, coords, title="Network map", der=None, customer_phases=
     fig = go.Figure(traces)
     fig.update_layout(title=dict(text=title, x=0.01, font=dict(size=15)), template="plotly_white", hovermode="closest",
                       dragmode="pan", showlegend=False, margin=dict(l=10, r=10, t=40, b=10), uirevision="keep",
-                      meta={"band_titles": BAND_TITLES, "lens_modes": ["voltage", "current", "power", "pf", "losses", "sources"],
+                      meta={"band_titles": BAND_TITLES, "lens_modes": LENS_MODES,
                             "modes": {m: label for m, label in MODES.items()
                                       if any(m in t.meta["modes"] and t.meta["group"] not in ("Network outline", "Sources")
                                              for t in traces)}})
@@ -321,73 +323,68 @@ def _voltage_lens(go, info, coords, results, bands):
             for (kind, (label, colour)), points in sorted(groups.items(), key=lambda kv: (kv[0][0], order[kv[0][1][0]]))]
 
 
-def _branch_kind(info, element, bus):
-    """Element type row of a lens: MV / LV lines, head transformers or transformers by class
-    (other branch elements, e.g. reactors, are counted with the transformers as 'other')."""
+def _element_kind(info, element, a):
+    """Element type shown in the lens checklists: MV / LV lines, head transformers, transformers by class."""
     if element.startswith("line."):
-        return "MV lines" if info.bus_kv_ll.get(bus, 0) > 1.0 else "LV lines"
+        return "MV lines" if info.bus_kv_ll.get(a, 0) > 1.0 else "LV lines"
     asset = info._asset_map.get(element)
-    return "Head transformers" if asset and asset.kind == "head_transformer" else \
-        f"Transformers: {info.transformer_class.get(element, 'other').replace('_', '-')}"
+    if asset and asset.kind == "head_transformer":
+        return "Head transformers"
+    return f"Transformers: {info.transformer_class.get(element, 'other').replace('_', '-')}"
 
 
-def _source_lens(go, info, coords, ends, flows, results, src_points):
-    """Sources lens: every bus, line and transformer in the colour of the source whose area it is
-    in (info.source_of: the nearest source along the network), one band per source so each area
-    can be shown or hidden; elements joining two areas (info.source_ties) and parts that no source
-    reaches get their own bands."""
-    names = [s["name"] for s in info.sources] or sorted(set(info.source_of.values()))
-    style = {n: (n, SOURCE_COLOURS[i % len(SOURCE_COLOURS)], i + 1) for i, n in enumerate(names)}
-    style[SOURCE_TIE[0]] = (*SOURCE_TIE, len(names) + 1)
-    style[NO_SOURCE[0]] = (*NO_SOURCE, len(names) + 2)
-    ties = {e: (a, b) for e, a, b in info.source_ties}
+def _source_lens(go, info, coords, flows, ends, src_points):
+    """Sources lens: buses, lines and transformers coloured by the source that feeds them (info.source_of),
+    one band per source (so each source's area can be shown or hidden), then the ties between two
+    sources' areas (info.source_ties) and the parts no source reaches (islands)."""
+    names = [s["name"] for s in info.sources] or [s[2] for s in src_points]
+    names += sorted(set(info.source_of.values()) - set(names))
+    bands = {n: (n, SOURCE_COLOURS[i % len(SOURCE_COLOURS)]) for i, n in enumerate(names)}
+    order = {label: i + 1 for i, label in enumerate(names + [SOURCE_TIES[0], NOT_REACHED[0]])}
+    ties = {e for e, _, _ in info.source_ties}
 
-    def band(source):
-        return style.get(source) or style[NO_SOURCE[0]]
+    def hover(element, a, b):
+        if flows:
+            return _element_hover(element, info, flows)
+        return f"<b>{element}</b><br>{a} - {b}<br>source: {info.source_of.get(a, info.source_of.get(b, 'none (not reached)'))}"
 
-    bus_v = (results or {}).get("bus_v", {})
-    buses, branches = {}, {}
-    for bus, (x, y) in coords.items():
-        source = info.source_of.get(bus)
-        v = bus_v.get(bus)
-        kind = "MV buses" if info.bus_kv_ll.get(bus, 0) > 1.0 else "LV buses"
-        buses.setdefault((kind, band(source)), []).append(
-            (x, y, bus, f"<b>{bus}</b><br>{info.bus_kv_ll.get(bus, 0):.3g} kV, source area: {source or 'none'}"
-                        + (f"<br>nodes {v[0]:.4f} - {v[1]:.4f} pu" if v else "")))
+    def band(*buses):
+        for bus in buses:
+            if bus in info.source_of:
+                return bands.get(info.source_of[bus], NOT_REACHED)
+        return NOT_REACHED
+
+    groups = {}
     for element, (a, b, _, _) in ends.items():
-        if a not in coords or b not in coords:
+        if not element.startswith(("line.", "transformer.")) or a not in coords or b not in coords:
             continue
-        if element in ties:
-            label = band(SOURCE_TIE[0])
-            extra = (f"<br>tie between the areas of {info.source_of.get(ties[element][0], '?')} and "
-                     f"{info.source_of.get(ties[element][1], '?')}")
-        else:
-            label = band(info.source_of.get(a) or info.source_of.get(b))
-            extra = ""
-        kind = _branch_kind(info, element, a)
-        branches.setdefault((kind, label), []).append((element, extra))
+        groups.setdefault((_element_kind(info, element, a), SOURCE_TIES if element in ties else band(a, b)), []).append(element)
+    for bus, xy in coords.items():
+        kind = "MV buses" if info.bus_kv_ll.get(bus, 0) > 1.0 else "LV buses"
+        groups.setdefault((kind, band(bus)), []).append(bus)
 
-    traces = []
-    for (kind, (label, colour, rank)), points in sorted(buses.items(), key=lambda kv: (kv[0][0], kv[0][1][2])):
-        traces.append(_markers(go, points, colour, 6 if kind == "MV buses" else 4, _meta("sources", kind, label, colour, rank=rank)))
-    for (kind, (label, colour, rank)), elements in sorted(branches.items(), key=lambda kv: (kv[0][0], kv[0][1][2])):
-        meta = _meta("sources", kind, label, colour, rank=rank)
-        tie = label == SOURCE_TIE[0]
-        pairs = [ends[e][:2] for e, _ in elements]
-        hover = [(e, _element_hover(e, info, flows, extra) if flows else f"<b>{e}</b>{extra}<br>{ends[e][0]} - {ends[e][1]}")
-                 for e, extra in elements]
-        if kind.startswith(("Transformers", "Head")):
-            traces.append(_segments(go, pairs, coords, colour, 1.5, {**meta, "n": -1}))
-            points = [(*coords[ends[e][0]], _short(e), text) for e, text in hover]
-            traces.append(_markers(go, points, colour, 12 if kind.startswith("Head") else 9, meta, "square"))
+    # grey outline under the areas, so a hidden source's area still shows where it is
+    traces = [_segments(go, [(a, b) for a, b, _, _ in ends.values()], coords, OUTLINE, 1,
+                        _meta("sources", "Network outline", "outline of hidden areas (grey)", OUTLINE))]
+    for (kind, (label, colour)), items in sorted(groups.items(), key=lambda kv: (kv[0][0], order[kv[0][1][0]])):
+        meta = _meta("sources", kind, label, colour, rank=order[label])
+        tie = label == SOURCE_TIES[0]
+        if kind.endswith("lines"):
+            traces.append(_segments(go, [ends[e][:2] for e in items], coords, colour, 3.5 if tie else 2, meta))
+            points = [(*_midpoint(coords, *ends[e][:2]), _short(e), hover(e, *ends[e][:2])) for e in items]
+            traces.append(_markers(go, points, colour, 8, {**meta, "n": -1}, hoverable_only=not tie))
+        elif kind.endswith("buses"):
+            points = [(*coords[bus], bus, f"<b>{bus}</b><br>{info.bus_kv_ll.get(bus, 0):.3g} kV<br>source: "
+                                          f"{info.source_of.get(bus, 'none (not reached)')}") for bus in items]
+            traces.append(_markers(go, points, colour, 5, meta))
         else:
-            mv = kind == "MV lines"
-            traces.append(_segments(go, pairs, coords, colour, 5 if tie else (2.5 if mv else 1.5), meta, "dash" if tie else None))
-            points = [(*_midpoint(coords, *ends[e][:2]), _short(e), text) for e, text in hover]
-            traces.append(_markers(go, points, colour, 9 if tie else 7, {**meta, "n": -1}, hoverable_only=not tie))
-    for x, y, name, text in src_points:
-        label, colour, rank = band(name)
-        traces.append(_markers(go, [(x, y, name, text)], colour, 16, _meta("sources", "Sources", label, colour, rank=rank),
+            head = kind.startswith("Head")
+            points = [(*coords[ends[e][0]], _short(e), hover(e, *ends[e][:2])) for e in items]
+            traces.append(_markers(go, points, colour, 16 if head else 9, meta, "star" if head else "square"))
+    # the sources themselves, in their own colour and shown / hidden with their area
+    for x, y, name, hover in src_points:
+        label, colour = bands.get(name, NOT_REACHED)
+        traces.append(_markers(go, [(x, y, name, hover)], colour, 17, _meta("sources", "Sources", label, colour, rank=order[label]),
                                "triangle-up", line_colour="#2c2c2a"))
     return traces
 
@@ -417,18 +414,8 @@ def _flow_lens(go, info, coords, flows, ends, mode, include, value_of, bands, mi
         if band_for:
             band = band_for(element, f)
         else:
-            value = value_of(f)
-            if mode == "pf" and _has_flow(f) and f["P"] < 0:
-                band = REVERSE
-            else:
-                band = band_of(value, bands) if value == value else missing
-        if element.startswith("line."):
-            kind = "MV lines" if info.bus_kv_ll.get(a, 0) > 1.0 else "LV lines"
-        else:
-            asset = info._asset_map.get(element)
-            kind = "Head transformers" if asset and asset.kind == "head_transformer" else \
-                f"Transformers: {info.transformer_class.get(element, 'other').replace('_', '-')}"
-        groups.setdefault((kind, band or missing), []).append(element)
+            band = band_of(value, bands) if value == value else missing
+        groups.setdefault((_element_kind(info, element, a), band or missing), []).append(element)
     order = {b[0]: i for i, b in enumerate(bands)}
     traces = []
     for (kind, (label, colour)), elements in sorted(groups.items(), key=lambda kv: (kv[0][0], order.get(kv[0][1][0], 99))):

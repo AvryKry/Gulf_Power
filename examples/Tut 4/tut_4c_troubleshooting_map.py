@@ -10,10 +10,9 @@
 #      step-up) and devices (capacitors, fuses, reclosers, switches, regulators).
 #   2. Solves one snapshot power flow (as in Tut 4b, again with fixed controls if it does not settle).
 #   3. Saves network_map.html: open it in a browser. The panel beside the map picks a mode
-#      (names and phases, voltage / current / power / power factor / losses lenses, a source lens,
-#      devices) and ticks element types and value bands on and off. The source lens (networks with
-#      two or more sources) colours every bus, line and transformer by the source that feeds it and
-#      has one tick per source to show or hide its area. Changing mode keeps the zoom, so a problem
+#      (names and phases, sources lens (each source's area, shown or hidden source by source),
+#      voltage / current / power / power factor / losses lenses, devices) and ticks element types
+#      and value bands (or sources) on and off. Changing mode keeps the zoom, so a problem
 #      found in a lens can be zoomed into and identified in "Names and phases".
 #   4. Saves three short tables: sources.csv (one row per source), out_of_range.csv (only the
 #      elements at the far ends: above 110 % of their rating or nominal voltage, or not energized)
@@ -153,5 +152,5 @@ interactive.save_network_html(figure, run_folder / "network_map.html")
 saved = res.save_tables({"sources": reports.sources_table(info, results),
                          "out_of_range": reports.out_of_range_table(info, results),
                          "loading_by_code": reports.loading_by_code_table(info, results)}, run_folder)
-where = run_folder.relative_to(project_root).as_posix() if not ANONYMISE_REPORT else "results/tut4/<network>/troubleshooting"
+where = run_folder.relative_to(project_root).as_posix() if not ANONYMISE_REPORT else f"{RESULTS_FOLDER}/<network>/troubleshooting"
 print(f"Saved network_map.html and {', '.join(f'{n}.csv' for n in saved)} to {where}")
