@@ -58,6 +58,12 @@ SOURCE_TIE, NO_SOURCE = ("ties between sources' areas", "#d4537e"), ("no source 
 DEVICE_STYLE = {"capacitor": ("Capacitors", "#185fa5", "square-open", 13), "fuse": ("Fuses", "#a32d2d", "x", 11),
                 "recloser": ("Reclosers", "#d85a30", "diamond", 12), "switch": ("Switches", "#3b6d11", "square", 10),
                 "regulator": ("Regulators", "#534ab7", "hexagon", 13)}
+# sources lens: one colour per source (repeating past 10, then with another marker shape)
+SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#c9a100", "#17a2b8", "#a32d2d", "#7a5c3e",
+                  "#8c9d1e", "#5f6b7a"]
+SOURCE_SYMBOLS = ["triangle-up", "triangle-down", "diamond", "pentagon", "hexagon", "star-triangle-up"]
+SOURCE_OUTLINE = "network outline (stays when an area is hidden)"
+TIE, ISLAND = ("ties between sources", "#d4537e"), ("no source (island)", "#2c2c2a")
 
 
 def voltage_bands(limits):
@@ -84,7 +90,7 @@ def band_of(value, bands):
 
 # --- Traces ------------------------------------------------------------------------------------
 CONTEXT = "outline and sources (no value)"
-BAND_TITLES = {"names": "Phases", "voltage": "Voltage bands", "current": "Loading bands (% of rated current)",
+BAND_TITLES = {"names": "Phases", "sources": "Sources (tick to show or hide each one's area)", "voltage": "Voltage bands", "current": "Loading bands (% of rated current)",
                "power": "Loading bands (% of kVA rating)", "pf": "Power factor bands", "losses": "Loss bands (% of power carried)",
                "sources": "Sources (tick to show)", "devices": "Bands"}
 
