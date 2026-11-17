@@ -10,9 +10,12 @@
 #      step-up) and devices (capacitors, fuses, reclosers, switches, regulators).
 #   2. Solves one snapshot power flow (as in Tut 4b, again with fixed controls if it does not settle).
 #   3. Saves network_map.html: open it in a browser. The panel beside the map picks a mode
-#      (names and phases, voltage / current / power / power factor / losses lenses, devices) and
-#      ticks element types and value bands on and off. Changing mode keeps the zoom, so a problem
-#      found in a lens can be zoomed into and identified in "Names and phases".
+#      (names and phases, sources lens, voltage / current / power / power factor / losses lenses,
+#      devices) and ticks element types and value bands on and off. The sources lens colours each
+#      source's area (the buses, lines and transformers it feeds) and has one tick box per source
+#      to show or hide it, plus ties between sources and islands no source reaches. Changing mode
+#      keeps the zoom, so a problem found in a lens can be zoomed into and identified in "Names
+#      and phases".
 #   4. Saves three short tables: sources.csv (one row per source), out_of_range.csv (only the
 #      elements at the far ends: above 110 % of their rating or nominal voltage, or not energized)
 #      and loading_by_code.csv (loading of each line / transformer code: how many at 0 %, below
@@ -36,8 +39,8 @@ from dss_toolkit import engine as eng, extract, interactive, paths, reports, res
 # Settings, in selection order
 # =============================================================================================
 # ---- 1. Network: a folder and a master file (.dss or .txt), nothing else ----------------------
-DATA_FOLDER = "tut_4_data"                         # folder name, path from the repo root, or full path
-MASTER_FILE_NAME = "Master.txt"          # .dss or .txt master file in DATA_FOLDER
+DATA_FOLDER = "HYDRO_DSS"                         # folder name, path from the repo root, or full path
+MASTER_FILE_NAME = "Master.dss"          # .dss or .txt master file in DATA_FOLDER
 VOLTAGE_BASES_KV = (22.0, 0.4)                     # line-to-line; None = set by the data (e.g. SetkVBase lines)
 BUS_COORDINATES_FILE_NAME = None   # 'bus, x, y' list or OpenDSS SetBusXY file; None = none
 # CRE21 (Team Nando Tutorial 4, its tut_4_data folder in examples/Tut 4/):
