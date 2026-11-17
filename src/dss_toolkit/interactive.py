@@ -51,6 +51,10 @@ SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#c9a100", "#0f9fb
 TIES = ("Ties between sources", "#d4537e")   # lines / transformers joining the areas of two sources
 NOT_FED = ("not fed by any source", "#b4b2a9")
 NO_RATING, NO_FLOW, REVERSE = ("no rating in the data", "#b4b2a9"), ("no flow (below 1 kVA)", "#b4b2a9"), ("reverse flow", "#d4537e")
+# sources lens: one colour per source (repeats after the tenth), ties and parts no source reaches
+SOURCE_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#6250d6", "#eda100", "#a32d2d", "#3b6d11", "#5dcaa5", "#854f0b",
+                  "#7f77dd"]
+SOURCE_TIE, NO_SOURCE = ("ties between sources' areas", "#d4537e"), ("no source reached", "#2c2c2a")
 DEVICE_STYLE = {"capacitor": ("Capacitors", "#185fa5", "square-open", 13), "fuse": ("Fuses", "#a32d2d", "x", 11),
                 "recloser": ("Reclosers", "#d85a30", "diamond", 12), "switch": ("Switches", "#3b6d11", "square", 10),
                 "regulator": ("Regulators", "#534ab7", "hexagon", 13)}
@@ -90,13 +94,14 @@ def _meta(modes, group, band=CONTEXT, colour=OUTLINE, on=True, n=0, rank=0):
             "on": on, "n": n, "rank": rank}
 
 
-def _segments(go, pairs, coords, colour, width, meta):
+def _segments(go, pairs, coords, colour, width, meta, dash=None):
     xs, ys = [], []
     for a, b in pairs:
         if a in coords and b in coords:
             xs += [coords[a][0], coords[b][0], None]
             ys += [coords[a][1], coords[b][1], None]
-    return go.Scattergl(x=xs, y=ys, mode="lines", line=dict(color=colour, width=width), hoverinfo="skip",
+    return go.Scattergl(x=xs, y=ys, mode="lines", line=dict(color=colour, width=width, **({"dash": dash} if dash else {})),
+                        hoverinfo="skip",
                         meta={**meta, "n": meta.get("n") or len(xs) // 3}, showlegend=False)
 
 
@@ -254,7 +259,8 @@ def network_figure(info, coords, title="Network map", der=None, customer_phases=
         name, colour, symbol, size = DEVICE_STYLE.get(kind, (kind, "#5f5e5a", "circle", 10))
         traces.append(_markers(go, points, colour, size, _meta("devices", name, CONTEXT, colour), symbol))
 
-    # ---- Lenses (need results) --------------------------------------------------------------------------
+    # ---- Sources lens (topology only) and value lenses (need results) -----------------------------------
+    traces += _source_lens(go, info, coords, ends, flows, results, src_points)
     if results:
         traces += _voltage_lens(go, info, coords, results, bands["voltage"])
         traces += _flow_lens(go, info, coords, flows, ends, "current", lambda e: e.startswith("line."),
@@ -307,6 +313,77 @@ def _voltage_lens(go, info, coords, results, bands):
     order = {b[0]: i for i, b in enumerate(bands)}
     return [_markers(go, points, colour, 9 if label != "normal" else 5, _meta("voltage", kind, label, colour, rank=order[label] + 1))
             for (kind, (label, colour)), points in sorted(groups.items(), key=lambda kv: (kv[0][0], order[kv[0][1][0]]))]
+
+
+def _branch_kind(info, element, bus):
+    """Element type row of a lens: MV / LV lines, head transformers or transformers by class
+    (other branch elements, e.g. reactors, are counted with the transformers as 'other')."""
+    if element.startswith("line."):
+        return "MV lines" if info.bus_kv_ll.get(bus, 0) > 1.0 else "LV lines"
+    asset = info._asset_map.get(element)
+    return "Head transformers" if asset and asset.kind == "head_transformer" else \
+        f"Transformers: {info.transformer_class.get(element, 'other').replace('_', '-')}"
+
+
+def _source_lens(go, info, coords, ends, flows, results, src_points):
+    """Sources lens: every bus, line and transformer in the colour of the source whose area it is
+    in (info.source_of: the nearest source along the network), one band per source so each area
+    can be shown or hidden; elements joining two areas (info.source_ties) and parts that no source
+    reaches get their own bands."""
+    names = [s["name"] for s in info.sources] or sorted(set(info.source_of.values()))
+    style = {n: (n, SOURCE_COLOURS[i % len(SOURCE_COLOURS)], i + 1) for i, n in enumerate(names)}
+    style[SOURCE_TIE[0]] = (*SOURCE_TIE, len(names) + 1)
+    style[NO_SOURCE[0]] = (*NO_SOURCE, len(names) + 2)
+    ties = {e: (a, b) for e, a, b in info.source_ties}
+
+    def band(source):
+        return style.get(source) or style[NO_SOURCE[0]]
+
+    bus_v = (results or {}).get("bus_v", {})
+    buses, branches = {}, {}
+    for bus, (x, y) in coords.items():
+        source = info.source_of.get(bus)
+        v = bus_v.get(bus)
+        kind = "MV buses" if info.bus_kv_ll.get(bus, 0) > 1.0 else "LV buses"
+        buses.setdefault((kind, band(source)), []).append(
+            (x, y, bus, f"<b>{bus}</b><br>{info.bus_kv_ll.get(bus, 0):.3g} kV, source area: {source or 'none'}"
+                        + (f"<br>nodes {v[0]:.4f} - {v[1]:.4f} pu" if v else "")))
+    for element, (a, b, _, _) in ends.items():
+        if a not in coords or b not in coords:
+            continue
+        if element in ties:
+            label = band(SOURCE_TIE[0])
+            extra = (f"<br>tie between the areas of {info.source_of.get(ties[element][0], '?')} and "
+                     f"{info.source_of.get(ties[element][1], '?')}")
+        else:
+            label = band(info.source_of.get(a) or info.source_of.get(b))
+            extra = ""
+        kind = _branch_kind(info, element, a)
+        branches.setdefault((kind, label), []).append((element, extra))
+
+    traces = []
+    for (kind, (label, colour, rank)), points in sorted(buses.items(), key=lambda kv: (kv[0][0], kv[0][1][2])):
+        traces.append(_markers(go, points, colour, 6 if kind == "MV buses" else 4, _meta("sources", kind, label, colour, rank=rank)))
+    for (kind, (label, colour, rank)), elements in sorted(branches.items(), key=lambda kv: (kv[0][0], kv[0][1][2])):
+        meta = _meta("sources", kind, label, colour, rank=rank)
+        tie = label == SOURCE_TIE[0]
+        pairs = [ends[e][:2] for e, _ in elements]
+        hover = [(e, _element_hover(e, info, flows, extra) if flows else f"<b>{e}</b>{extra}<br>{ends[e][0]} - {ends[e][1]}")
+                 for e, extra in elements]
+        if kind.startswith(("Transformers", "Head")):
+            traces.append(_segments(go, pairs, coords, colour, 1.5, {**meta, "n": -1}))
+            points = [(*coords[ends[e][0]], _short(e), text) for e, text in hover]
+            traces.append(_markers(go, points, colour, 12 if kind.startswith("Head") else 9, meta, "square"))
+        else:
+            mv = kind == "MV lines"
+            traces.append(_segments(go, pairs, coords, colour, 5 if tie else (2.5 if mv else 1.5), meta, "dash" if tie else None))
+            points = [(*_midpoint(coords, *ends[e][:2]), _short(e), text) for e, text in hover]
+            traces.append(_markers(go, points, colour, 9 if tie else 7, {**meta, "n": -1}, hoverable_only=not tie))
+    for x, y, name, text in src_points:
+        label, colour, rank = band(name)
+        traces.append(_markers(go, [(x, y, name, text)], colour, 16, _meta("sources", "Sources", label, colour, rank=rank),
+                               "triangle-up", line_colour="#2c2c2a"))
+    return traces
 
 
 def _is_far_end(mode, label, bands):
