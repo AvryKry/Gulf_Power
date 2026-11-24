@@ -49,12 +49,13 @@ class BaseCircuit:
         commands.append(der_text.loadshape_command(PV_SHAPE, zeros, interval_minutes=step_minutes, use_actual=False))
         for customer in self.pv_candidates:
             load = info.loads[customer]
-            commands.append(der_text.pv_command(f"pv_{customer}", load["bus"], len(net.bus_phases(load["bus"])), load["kV"],
+            commands.append(der_text.pv_command(f"pv_{customer}", load["bus"], len(net.bus_phases(load["bus"])), net.der_kv(load),
                                                 1.0, 1.0, daily_shape=PV_SHAPE, kvar_max=1.0, extra="enabled=no"))
         for mode, control in self.controls.items():
             curve = f"toolkit_{mode}_curve"
             commands += [der_text.xy_curve_command(curve, control.voltage_pu, control.output_pu),
-                         der_text.inverter_control_command(f"toolkit_{mode}", mode, curve, extra="enabled=no")]
+                         der_text.inverter_control_command(f"toolkit_{mode}", mode, curve,
+                                                           extra=f"{getattr(control, 'extra', '')} enabled=no".strip())]
         eng.run_commands(engine, commands)
         eng.set_daily_mode(engine, step_minutes)
         eng.solve(engine, verbose=False)               # initialise every element once before the first scenario

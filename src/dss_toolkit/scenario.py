@@ -92,11 +92,14 @@ class InverterControl:
     """A volt-watt or volt-var curve used by every PV inverter of a scenario.
     mode: "volt_watt" or "volt_var"; voltage_pu: x points of the curve [pu of rated voltage];
     output_pu: y points - active power limit [pu of Pmpp] for volt-watt, reactive power
-    [pu of the inverter kVA, + = injected] for volt-var; source: where the settings come from."""
+    [pu of the inverter kVA, + = injected] for volt-var; source: where the settings come from;
+    extra: more InvControl properties, e.g. "varchangetolerance=0.01" (they replace the defaults of
+    der.inverter_control_command, which follow Team Nando Tutorial 3)."""
     mode: str
     voltage_pu: tuple
     output_pu: tuple
     source: str = ""
+    extra: str = ""
 
 
 # PV operation modes: what each one puts in a scenario
@@ -497,7 +500,7 @@ def save_scenario(scenario, path):
             "der": [{"kind": d.kind, "customer": d.customer, "kva": d.kva, "pmpp": d.pmpp} for d in scenario.der],
             "inverter_control": None if control is None else
             {"mode": control.mode, "voltage_pu": list(control.voltage_pu), "output_pu": list(control.output_pu),
-             "source": control.source}}
+             "source": control.source, "extra": control.extra}}
     np.savez_compressed(path, meta=json.dumps(meta, default=str), **arrays)
 
 
@@ -509,5 +512,6 @@ def load_scenario(path):
         der = [DER(d["kind"], d["customer"], d["kva"], f[f"DER__{i}"], d["pmpp"]) for i, d in enumerate(meta["der"])]
     control = meta.get("inverter_control")
     control = None if control is None else InverterControl(control["mode"], tuple(control["voltage_pu"]),
-                                                           tuple(control["output_pu"]), control["source"])
+                                                           tuple(control["output_pu"]), control["source"],
+                                                           control.get("extra", ""))
     return Scenario(TimeWindow(*meta["window"]), demand, der, meta["tags"], control)

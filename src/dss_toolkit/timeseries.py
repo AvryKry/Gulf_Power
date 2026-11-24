@@ -64,10 +64,11 @@ def demand_commands(demand, step_minutes):
 def pv_der_commands(d, load_info, step_minutes):
     """Commands for one PV DER: its own normalised shape + a PVSystem at the customer's bus. The
     inverter may use its full kVA as reactive power (kvarMax), which a volt-var control needs; with
-    no control the PV runs at unity power factor."""
+    no control the PV runs at unity power factor. Its kV is the bus voltage base (network.der_kv), so
+    an inverter control reads the same per-unit voltage as the node voltages the tool reports."""
     shape = f"shape_{d.name}"
     return [der_text.loadshape_command(shape, d.profile, interval_minutes=step_minutes, use_actual=False),
-            der_text.pv_command(d.name, load_info["bus"], len(net.bus_phases(load_info["bus"])), load_info["kV"],
+            der_text.pv_command(d.name, load_info["bus"], len(net.bus_phases(load_info["bus"])), net.der_kv(load_info),
                                 d.kva, d.pmpp, daily_shape=shape, kvar_max=d.kva)]
 
 
@@ -95,7 +96,8 @@ def inverter_control_commands(control, der_elements):
         return []
     curve = f"{INVERTER_CONTROL_NAME}_curve"
     return [der_text.xy_curve_command(curve, control.voltage_pu, control.output_pu),
-            der_text.inverter_control_command(INVERTER_CONTROL_NAME, control.mode, curve, der_elements)]
+            der_text.inverter_control_command(INVERTER_CONTROL_NAME, control.mode, curve, der_elements,
+                                              extra=getattr(control, "extra", ""))]
 
 
 def existing_der(engine):
