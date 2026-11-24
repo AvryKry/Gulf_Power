@@ -113,8 +113,25 @@ def transformer_segments(engine):
 ZIP_TYPES = {(0, 0, 1): "Const. P", (1, 0, 0): "Const. Z", (0, 1, 0): "Const. I"}
 
 
+def bus_kv_base(engine, bus_text, phases=None):
+    """Voltage base [kV] of a bus for an element connected to it with 'phases' phases (default: the
+    phases written in bus_text): line-to-neutral for one phase, line-to-line for two or three
+    (the OpenDSS convention for an element's kV). None if the bus has no voltage base."""
+    try:
+        if engine.ActiveCircuit.SetActiveBus(bus_name(bus_text)) < 0:
+            return None
+        base = engine.ActiveCircuit.ActiveBus.kVBase
+    except Exception:                                # bus list not built yet (circuit never solved)
+        return None
+    if not base or base <= 0:
+        return None
+    phases = len(bus_phases(bus_text)) if phases is None else phases
+    return base if phases == 1 else base * 3 ** 0.5
+
+
 def load_inventory(engine):
-    """Rated data of every load: {name: {bus, conn, kV, kW, kvar, model}}."""
+    """Rated data of every load: {name: {bus, conn, kV, kV_base, kW, kvar, model}}. kV_base is the
+    voltage base of the load's bus for its connection (bus_kv_base; None without voltage bases)."""
     loads = engine.ActiveCircuit.Loads
     inventory = {}
     for name in element_names(loads):
@@ -125,7 +142,26 @@ def load_inventory(engine):
             model = {1: "Const. P", 2: "Const. Z", 5: "Const. I"}.get(loads.Model, f"model={loads.Model}")
         inventory[name] = {"bus": element_bus(engine, f"Load.{name}"), "conn": "delta" if loads.IsDelta else "wye",
                            "kV": loads.kV, "kW": loads.kW, "kvar": loads.kvar, "model": model}
+    for item in inventory.values():
+        item["kV_base"] = bus_kv_base(engine, item["bus"])
     return inventory
+
+
+_NOTED_NO_BASE = set()
+
+
+def der_kv(load_info):
+    """Rated kV for a DER (e.g. PV) at a load's bus: the bus's voltage base (load_inventory kV_base),
+    so the inverter's per-unit voltage equals the node's per-unit voltage on any network and voltage
+    level. Without a voltage base, the load's own kV (with a note, printed once per bus)."""
+    if load_info.get("kV_base"):
+        return load_info["kV_base"]
+    bus = bus_name(load_info["bus"])
+    if bus not in _NOTED_NO_BASE:
+        _NOTED_NO_BASE.add(bus)
+        print(f"NOTE: bus {bus} has no voltage base; PV there uses the load's kV ({load_info['kV']:g}) as its rating, "
+              "so its inverter voltage (pu) may differ from the node voltage (pu)")
+    return load_info["kV"]
 
 
 def bus_nodes_from_text(bus_text):

@@ -1,0 +1,13 @@
+I am preparing a slidedeck to present our progress on the tool and I want to include visuals related to verification and validation of the tool. 
+
+I want one visual I can use for each, where verification proves that the tool operates according to engineering and first principles expectations, and validation checks the tool outputs against a real-world results data set. That said, it is preferred if the new example script and corresponding updates to the toolkit itself can produce as many results as is reasonable to make a solid conclusion on verification and validation, and one output for each verification and validation that should be used directly in the slide deck
+
+I have attached the network data files readily available, but you should not be limited to these datasets. These zipped data files may be useful and adequate for verification tests, but they can only be used for validation if you can find a matching power flow results database corresponding to the network online, which I do not have in hand. 
+
+I do not have a clear idea on what exactly I want to evaluate and plot or the outcomes that should be highlighted in the slide deck, so it would be beneficial to conversate a few times where you generate some creative ideas for both relevant metrics/comparisons and visual mediums through which to illustrate the metrics/comparisons. At a baseline, verification could focus on changing network parameters (load, DER, others) and observing tool outputs (voltages, loading, losses, power, violations) to evaluate the relationship and ensure the relationship adheres to expectations. 
+
+For validation, it would be ideal if you can find a model with a corresponding solved power flow or time series power flow, using the provided data sets or by searching the web. The comparison could look like a scatter plot where each point along the X axis represents one relevant output from the tool (power, losses, violations, min and max voltage or loading) and the y-axis can represent a normalized error factor for each of the X-axis comparisons, and there is a plotted point for the tool run, and a plotted point for the real world data (or whatever data set came from outside the tool). Additionally on validation, it would be very ideal if a GIS map of the extracted real world data could be overlayed with the tool network map, to show how the network mapping functions correlates to actual geographic locations. 
+
+Suggest some routes, ask some questions and we will go from there.
+
+Additionally, at the beginning of this initial output, can you please reiterate the most updated instructions in REVISE TOOLKIT because I tried to use the skill in another chat and it did not seem to execute in it's complete form, so it may require updating

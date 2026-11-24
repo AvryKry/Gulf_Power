@@ -11,3 +11,5 @@ tut_3_data
 tut_4_data
 # build output from "pip install -e ." (regenerated on every install)
 *.egg-info/
+european_lv_data
+ieee123_data
